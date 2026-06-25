@@ -1,0 +1,17 @@
+# docker-compose.yml — Local run without AWS
+services:
+  app:
+    build: .
+    entrypoint:
+      - node
+    env_file:
+      - .env
+    environment:
+      # Force local config loading from .env (skip AWS Secrets Manager)
+      - SECRET_NAME=
+      # Keep these empty for local-only runs
+      - SNS_TOPIC_ARN=
+      - S3_BUCKET=
+    command:
+      - -e
+      - "import('./src/index.js').then(async ({ handler }) => { const res = await handler({}, { awsRequestId: 'docker-local-run' }); console.log(res); }).catch((err) => { console.error(err); process.exit(1); });"
