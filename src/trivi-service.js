@@ -11,7 +11,8 @@ export class TriviService {
   constructor(config, auth) {
     this.baseUrl = config.baseUrl;
     this.bankAccountId = config.bankAccountId;
-	  this.uploadedDocumentsPath = config.uploadedDocumentsPath || '/accountingdocuments/uploaded';
+	  this.uploadsPath = config.uploadsPath || '/uploads';
+	  this.scansPath = config.scansPath || '/accountingdocuments/scans';
 	  this.uploadFieldName = config.uploadFieldName || 'file';
     this.auth = auth;
   }
@@ -61,44 +62,75 @@ export class TriviService {
     return (data || []).map(i => i.message || JSON.stringify(i));
   }
 
+	/**
+	 * Upload an email attachment to TRIVI as a scanned accounting document.
+	 * Two-step flow per TRIVI Public API v2:
+	 *   1. POST {uploadsPath} (multipart/form-data) → returns { id }
+	 *   2. POST {scansPath} (JSON [{ files: [id] }]) → creates the document
+	 * @returns {Promise<{ fileId: number|string, scan: any }>}
+	 */
 	async uploadDocumentAttachment(attachment, metadata = {}) {
-		const headers = await this.#authHeaders();
-		const form = new FormData();
-		const path = this.uploadedDocumentsPath.startsWith('/')
-			? this.uploadedDocumentsPath
-			: `/${this.uploadedDocumentsPath}`;
+		const authHeaders = await this.#authHeaders();
+		const normalize = (p) => (p.startsWith('/') ? p : `/${p}`);
 
-		// TRIVI Files API only accepts the file field
+		// ── Step 1: upload the raw file → returns a numeric file id ──
+		const form = new FormData();
 		form.append(this.uploadFieldName, fs.createReadStream(attachment.path), {
 			filename: attachment.filename,
 			contentType: attachment.mimeType,
 			knownLength: attachment.sizeBytes,
 		});
 
-		const fullUrl = `${this.baseUrl}${path}`;
-		console.log(`[trivi] Uploading attachment to uploaded documents: ${attachment.filename}`);
-		console.log(`[trivi] POST ${fullUrl}`);
+		const uploadsUrl = `${this.baseUrl}${normalize(this.uploadsPath)}`;
+		console.log(`[trivi] Uploading file: ${attachment.filename} → POST ${uploadsUrl}`);
 
-		const { status, data } = await axios.post(fullUrl, form, {
-			headers: {
-				...headers,
-				...form.getHeaders(),
-			},
+		const { data: uploadData } = await axios.post(uploadsUrl, form, {
+			headers: { ...authHeaders, ...form.getHeaders() },
 			maxBodyLength: Infinity,
 			maxContentLength: Infinity,
 		});
 
 		// TRIVI returns the web app HTML when the endpoint does not exist — treat as error
-		if (typeof data === 'string' && data.trimStart().startsWith('<!doctype')) {
+		if (typeof uploadData === 'string' && uploadData.trimStart().startsWith('<!doctype')) {
 			throw new Error(
-				`TRIVI upload endpoint returned HTML instead of JSON. ` +
-				`The endpoint "${fullUrl}" is likely wrong — check TRIVI API docs for the correct upload path.`
+				`TRIVI /uploads returned HTML instead of JSON. ` +
+				`The endpoint "${uploadsUrl}" is likely wrong — check TRIVI API docs.`
 			);
 		}
 
-		console.log(`[trivi] Upload response HTTP ${status}: ${JSON.stringify(data)}`);
+		const fileId = uploadData?.id;
+		if (!fileId) {
+			throw new Error(`TRIVI /uploads did not return a file id: ${JSON.stringify(uploadData)}`);
+		}
+		console.log(`[trivi] File uploaded: id=${fileId}`);
 
-		return data;
+		// ── Step 2: create an accounting document from the uploaded scan ──
+		// Field mapping verified against the API: scans `customerInstructions`
+		// surfaces as the document's POZNÁMKA, and `paymentType` (singular) sets
+		// the payment method. (`note` lands in `description`, not shown as note.)
+		const scansUrl = `${this.baseUrl}${normalize(this.scansPath)}`;
+		const note = `[Vytěženo AI] ${metadata.subject || ''}`.trim();
+		// TRIVI PaymentType enum: 1=BankTransfer, 2=Cash, 3=COD, 4=Card.
+		const PAYMENT_TYPE_CODES = { bank_transfer: 1, cash: 2, cod: 3, card: 4 };
+		const paymentType = PAYMENT_TYPE_CODES[metadata.classification?.paymentMethod];
+		const item = { files: [String(fileId)], customerInstructions: note };
+		if (paymentType) item.paymentType = paymentType;
+		const body = [item];
+		console.log(`[trivi] Creating accounting document from scan → POST ${scansUrl}`);
+
+		const { status, data } = await axios.post(scansUrl, body, {
+			headers: { ...authHeaders, 'Content-Type': 'application/json' },
+		});
+
+		if (typeof data === 'string' && data.trimStart().startsWith('<!doctype')) {
+			throw new Error(
+				`TRIVI /accountingdocuments/scans returned HTML instead of JSON. ` +
+				`The endpoint "${scansUrl}" is likely wrong — check TRIVI API docs.`
+			);
+		}
+
+		console.log(`[trivi] Scan document created HTTP ${status}: ${JSON.stringify(data)}`);
+		return { fileId, scan: data };
 	}
 
   // ─── Contacts ────────────────────────────────────────────

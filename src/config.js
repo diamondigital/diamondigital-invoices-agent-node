@@ -3,9 +3,9 @@ import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-sec
 
 /**
  * @returns {Promise<{
- *   email: {host:string, port:number, secure:boolean, user:string, password:string},
- *   trivi: {appId:string, appSecret:string, baseUrl:string, bankAccountId:number, uploadedDocumentsPath:string, uploadFieldName:string},
- *   mistral: {apiKey:string, model:string},
+ *   email: {host:string, port:number, secure:boolean, user:string, password:string, processedLabel:string, skippedFolder:string},
+ *   trivi: {appId:string, appSecret:string, baseUrl:string, bankAccountId:number, uploadsPath:string, scansPath:string, uploadFieldName:string},
+ *   mistral: {apiKey:string, classifierModel:string, uploadThreshold:number},
  *   notification: {snsTopicArn:string, adminEmail:string},
  *   s3: {bucketName:string}
  * }>}
@@ -26,18 +26,26 @@ function loadFromEnv() {
       secure: process.env.EMAIL_SECURE === 'true',
       user: requireEnv('EMAIL_USER'),
       password: requireEnv('EMAIL_PASSWORD'),
+      processedLabel: process.env.EMAIL_PROCESSED_LABEL || 'TRIVI',
+      skippedFolder: process.env.EMAIL_SKIPPED_FOLDER || 'Bez dokladu',
     },
     trivi: {
       appId: requireEnv('TRIVI_APP_ID'),
       appSecret: requireEnv('TRIVI_APP_SECRET'),
       baseUrl: process.env.TRIVI_BASE_URL || 'https://api.trivi.com/v2',
       bankAccountId: parseInt(process.env.TRIVI_BANK_ACCOUNT_ID || '0', 10),
-		uploadedDocumentsPath: process.env.TRIVI_UPLOADED_DOCUMENTS_PATH || '/accountingdocuments/uploaded',
-		uploadFieldName: process.env.TRIVI_UPLOAD_FIELD_NAME || 'file',
+      // Stable TRIVI API paths — constants, not config.
+      uploadsPath: '/uploads',
+      scansPath: '/accountingdocuments/scans',
+      uploadFieldName: 'file',
     },
     mistral: {
 		apiKey: process.env.MISTRAL_API_KEY || '',
-      model: process.env.MISTRAL_MODEL || 'mistral-large-latest',
+      // Cheapest model sufficient for "is this an accounting document?" (eval: 9/9
+      // on PDFs via OCR text, 5/5 on images via vision). Multimodal, ~$0.15/1M tok.
+      classifierModel: process.env.MISTRAL_CLASSIFIER_MODEL || 'ministral-8b-latest',
+      // Min confidence to upload a classified accounting document
+      uploadThreshold: parseFloat(process.env.MISTRAL_UPLOAD_THRESHOLD || '0.85'),
     },
     notification: {
       snsTopicArn: process.env.SNS_TOPIC_ARN || '',

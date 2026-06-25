@@ -5,6 +5,7 @@ import { TriviService } from './trivi-service.js';
 import { EmailService } from './email-service.js';
 import { StorageService } from './storage-service.js';
 import { NotificationService } from './notification-service.js';
+import { DocumentClassifier } from './document-classifier.js';
 import { withRetry } from './retry.js';
 import fs from 'node:fs/promises';
 
@@ -21,19 +22,27 @@ async function setup() {
   const storage = new StorageService(cfg.s3);
   const notification = new NotificationService(cfg.notification);
 
+  // Mistral classifier gates uploads; disabled (with a warning) if no API key.
+  const classifier = cfg.mistral.apiKey
+    ? new DocumentClassifier(cfg.mistral)
+    : null;
+  if (!classifier) {
+    console.warn('[setup] MISTRAL_API_KEY missing — classification disabled, all invoice-like attachments will be uploaded');
+  }
+
   // Wrap critical TRIVI calls with retry
 	trivi.uploadDocumentAttachment = withRetry(trivi.uploadDocumentAttachment.bind(trivi), {
     maxAttempts: 3, baseDelayMs: 1000,
 	});
 
   console.log('[setup] Services initialized');
-	return { cfg, trivi, email, storage, notification };
+	return { cfg, trivi, email, storage, notification, classifier };
 }
 
 // ─── Helpers ───────────────────────────────────────────
 
 const INVOICE_ATTACHMENT_EXTENSIONS = new Set([
-	'.pdf', '.jpg', '.jpeg', '.png', '.xml', '.isdoc', '.tif', '.tiff',
+	'.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.xml', '.isdoc', '.tif', '.tiff',
 ]);
 
 const INVOICE_ATTACHMENT_MIME_TYPES = new Set([
@@ -42,6 +51,9 @@ const INVOICE_ATTACHMENT_MIME_TYPES = new Set([
 	'text/xml',
 	'image/jpeg',
 	'image/png',
+	'image/webp',
+	'image/heic',
+	'image/heif',
 	'image/tiff',
 ]);
 
@@ -61,18 +73,21 @@ function isInvoiceAttachment(attachment) {
  * @param {Awaited<ReturnType<typeof setup>>} svc
  * @returns {Promise<Array<{
  *   emailId: string, subject: string, success: boolean,
- *   uploadedCount?: number, uploadedNames?: string[], error?: string
+ *   uploadedCount?: number, uploadedNames?: string[],
+ *   skipped?: boolean, skipReason?: string,
+ *   classifications?: Array<{filename:string, isAccountingDocument:boolean, confidence:number, docType:string, uploaded:boolean}>,
+ *   error?: string
  * }>>}
  */
 async function processInvoices(svc) {
-	const { cfg, trivi, email, storage, notification } = svc;
+	const { cfg, trivi, email, storage, notification, classifier } = svc;
 	console.log('=== Starting uploaded documents processing ===');
   const results = [];
 
-  // 1. Fetch unread emails
+  // 1. Fetch not-yet-processed emails (those without the processed label)
   let emails;
   try {
-    emails = await email.fetchUnreadEmails();
+    emails = await email.fetchUnprocessedEmails();
   } catch (err) {
     console.error(`[fatal] IMAP fetch failed: ${err.message}`);
     await notification.sendAlert(
@@ -83,7 +98,7 @@ async function processInvoices(svc) {
   }
 
   if (emails.length === 0) {
-    console.log('No unread emails — nothing to process');
+    console.log('No unprocessed emails — nothing to process');
     return results;
   }
 
@@ -99,62 +114,86 @@ async function processInvoices(svc) {
       console.log(`[processing] "${msg.subject}"`);
 		  const invoiceAttachments = msg.attachments.filter(isInvoiceAttachment);
 
-		  if (invoiceAttachments.length === 0) {
-			  console.log('[skip] No invoice-like attachment found');
-			  result.error = 'No invoice attachment found';
-        results.push(result);
-        continue;
-      }
-
 		  const uploadResponses = [];
+		  const uploadedNames = [];
+		  const classifications = [];
 
 		  for (const attachment of invoiceAttachments) {
+			  // Classify the attachment content (a logo and a real invoice both
+			  // arrive as image/pdf — only the LLM can tell them apart).
+			  let cls = { isAccountingDocument: true, confidence: 1, docType: 'unknown', reason: 'classifier-disabled' };
+			  if (classifier) {
+				  cls = await classifier.classifyAttachment(attachment, { subject: msg.subject, from: msg.from });
+				  console.log(`[classify] ${attachment.filename}: doc=${cls.isAccountingDocument} type=${cls.docType} conf=${cls.confidence} — ${cls.reason}`);
+			  }
+
+			  const qualifies = cls.isAccountingDocument && cls.confidence >= cfg.mistral.uploadThreshold;
+			  if (!qualifies) {
+				  console.log(`[skip] Not an accounting document (conf ${cls.confidence} < ${cfg.mistral.uploadThreshold}): ${attachment.filename}`);
+				  classifications.push({ filename: attachment.filename, ...cls, uploaded: false });
+				  continue;
+			  }
+
 			  const uploadResponse = await trivi.uploadDocumentAttachment(attachment, {
 				  subject: msg.subject,
 				  from: msg.from,
 				  receivedDate: msg.receivedDate.toISOString(),
+				  classification: cls,
         });
 			uploadResponses.push(uploadResponse);
+			uploadedNames.push(attachment.filename);
+			classifications.push({ filename: attachment.filename, ...cls, uploaded: true });
 			console.log(`[ok] Uploaded attachment: ${attachment.filename}`);
       }
 
-		  result.success = true;
-		  result.uploadedCount = invoiceAttachments.length;
-		  result.uploadedNames = invoiceAttachments.map((attachment) => attachment.filename);
+		  result.classifications = classifications;
 
-		  // 2b. Archive to S3 for audit trail
-		  try {
-			  await storage.archiveEmail(
-				  msg.emailId,
-				  JSON.stringify({
-					  subject: msg.subject,
-					  from: msg.from,
-					  date: msg.receivedDate.toISOString(),
-			  uploadedAttachments: invoiceAttachments.map((attachment) => ({
-				  filename: attachment.filename,
-				  mimeType: attachment.mimeType,
-				  sizeBytes: attachment.sizeBytes,
-			  })),
-			  triviUploadResponses: uploadResponses,
-		  }, null, 2)
-		);
-	  } catch (error) {
-		  console.warn(`[warn] S3 archive skipped after successful upload: ${error.message}`);
-	  }
+		  if (uploadedNames.length > 0) {
+			  result.success = true;
+			  result.uploadedCount = uploadedNames.length;
+			  result.uploadedNames = uploadedNames;
+
+			  // 2b. Archive to S3 for audit trail
+			  try {
+				  await storage.archiveEmail(
+					  msg.emailId,
+					  JSON.stringify({
+						  subject: msg.subject,
+						  from: msg.from,
+						  date: msg.receivedDate.toISOString(),
+				  classifications,
+				  triviUploadResponses: uploadResponses,
+			  }, null, 2)
+			);
+		  } catch (error) {
+			  console.warn(`[warn] S3 archive skipped after successful upload: ${error.message}`);
+		  }
+		  } else {
+			  // Examined fully, nothing qualified as an accounting document.
+			  result.skipped = true;
+			  result.skipReason = invoiceAttachments.length === 0
+				  ? 'no invoice-like attachment'
+				  : 'no attachment classified as accounting document';
+			  console.log(`[skip] "${msg.subject}": ${result.skipReason}`);
+		  }
 
     } catch (error) {
       console.error(`[error] "${msg.subject}": ${error.message}`);
       result.error = error.message;
     }
 
-	  // 3. Mark as read only when document upload succeeded
-	  if (result.success) {
-		  try {
-			  await email.markAsRead(msg.emailId);
-		  } catch (e) {
-			  console.warn(`[warn] Failed to mark email ${msg.emailId} as read: ${e.message}`);
+	  // 3. Email lifecycle (Seznam has no labels → move between folders):
+	  //    uploaded → processed folder; examined-no-doc → skipped folder;
+	  //    error → leave in INBOX so the next run retries it.
+	  try {
+		  if (result.success) {
+			  await email.markAsProcessed(msg.emailId);
+		  } else if (result.skipped) {
+			  await email.markAsSkipped(msg.emailId);
 		  }
-    }
+	  } catch (e) {
+		  console.warn(`[warn] Failed to move email ${msg.emailId}: ${e.message}`);
+	  }
 
     // 4. Cleanup temp attachment files
     for (const att of msg.attachments) {
@@ -175,8 +214,8 @@ async function processInvoices(svc) {
 
 async function sendSummary(results, notification) {
   const ok = results.filter(r => r.success);
-	const fail = results.filter(r => !r.success && r.error !== 'No invoice attachment found');
-	const skip = results.filter(r => r.error === 'No invoice attachment found');
+	const skip = results.filter(r => !r.success && r.skipped);
+	const fail = results.filter(r => !r.success && !r.skipped);
 
   const lines = [
 	  '📊 Diamondigital Documents Upload — Denní přehled',
@@ -184,13 +223,29 @@ async function sendSummary(results, notification) {
     `Celkem e-mailů: ${results.length}`,
 	  `✅ Úspěšně nahráno: ${ok.length}`,
     `⚠️  Chyby: ${fail.length}`,
-	  `⏭️  Přeskočeno (bez přílohy faktury): ${skip.length}`,
+	  `⏭️  Přeskočeno (není účetní doklad): ${skip.length}`,
   ];
 
   if (ok.length > 0) {
 	  lines.push('', 'Nahrané dokumenty:');
     for (const r of ok) {
-		lines.push(`  • ${r.uploadedCount || 0} příloha/y ← "${r.subject}"`);
+		const detail = (r.classifications || [])
+			.filter(c => c.uploaded)
+			.map(c => `${c.docType} ${Math.round((c.confidence || 0) * 100)}%`)
+			.join(', ');
+		lines.push(`  • ${r.uploadedCount || 0} příloha/y ← "${r.subject}"${detail ? ` [${detail}]` : ''}`);
+    }
+  }
+
+  if (skip.length > 0) {
+	  lines.push('', '⏭️  Přeskočené e-maily:');
+    for (const r of skip) {
+		// Show borderline attachments (classified as doc but below threshold)
+		const borderline = (r.classifications || [])
+			.filter(c => c.isAccountingDocument && !c.uploaded)
+			.map(c => `${c.filename}: ${c.docType} ${Math.round((c.confidence || 0) * 100)}%`);
+		lines.push(`  • "${r.subject}" — ${r.skipReason}`);
+		for (const b of borderline) lines.push(`      ⚠ možný doklad pod prahem: ${b}`);
     }
   }
 
@@ -234,15 +289,19 @@ export const handler = async (event, context) => {
   }
 
   const ok = results.filter(r => r.success).length;
-  const fail = results.filter(r => !r.success).length;
+  // Skipped (no accounting document) is an expected outcome, not a failure —
+  // only genuine errors (left in INBOX for retry) count as failed.
+  const skipped = results.filter(r => !r.success && r.skipped).length;
+  const fail = results.filter(r => !r.success && !r.skipped).length;
 
-  console.log(`[lambda] Done: ${results.length} processed, ${ok} ok, ${fail} failed`);
+  console.log(`[lambda] Done: ${results.length} processed, ${ok} ok, ${skipped} skipped, ${fail} failed`);
 
   return {
     statusCode: fail > 0 ? 207 : 200,
     body: JSON.stringify({
       processed: results.length,
       successful: ok,
+      skipped,
       failed: fail,
     }),
   };
