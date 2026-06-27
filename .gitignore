@@ -2,3 +2,8 @@ node_modules/
 .env
 *.log
 dist/
+
+# Terraform
+terraform/.terraform/
+*.tfstate
+*.tfstate.*

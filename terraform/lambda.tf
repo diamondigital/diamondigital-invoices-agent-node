@@ -10,14 +10,13 @@ resource "aws_lambda_function" "app" {
   environment {
     variables = {
       NODE_ENV    = "production"
-      SECRET_NAME=aws_se...me
+      SECRET_NAME = aws_secretsmanager_secret.app.name
     }
   }
 
   depends_on = [
     aws_iam_role_policy_attachment.lambda_logs,
     aws_iam_role_policy_attachment.lambda_secrets,
-    aws_iam_role_policy_attachment.lambda_s3,
     aws_iam_role_policy_attachment.lambda_sns,
   ]
 }

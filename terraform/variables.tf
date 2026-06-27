@@ -16,8 +16,8 @@ variable "lambda_timeout" {
 }
 
 variable "schedule_expression" {
-  description = "Cron expression (UTC). Default: 4:00 UTC = 6:00 CET"
-  default     = "cron(0 4 * * ? *)"
+  description = "Cron expression (UTC). Runs twice daily: 04:00 + 16:00 UTC (= 06:00 + 18:00 CEST)"
+  default     = "cron(0 4,16 * * ? *)"
 }
 
 variable "admin_email" {
