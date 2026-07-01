@@ -9,8 +9,10 @@ resource "aws_lambda_function" "app" {
 
   environment {
     variables = {
-      NODE_ENV    = "production"
-      SECRET_NAME = aws_secretsmanager_secret.app.name
+      NODE_ENV     = "production"
+      SECRET_NAME  = aws_secretsmanager_secret.app.name
+      SENTRY_DSN   = var.sentry_dsn
+      NODE_OPTIONS = "--import @sentry/aws-serverless/awslambda-auto"
     }
   }
 

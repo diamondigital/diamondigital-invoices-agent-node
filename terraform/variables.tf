@@ -23,3 +23,9 @@ variable "schedule_expression" {
 variable "admin_email" {
   default = "admin@diamondigital.cz"
 }
+
+variable "sentry_dsn" {
+  description = "Sentry DSN (not a secret — identifies the project for event ingest). Read at Node startup by --import, so it must be a plain Lambda env var, not fetched from Secrets Manager."
+  type        = string
+  default     = ""
+}
