@@ -69,3 +69,55 @@ test('extractZipEntries caps entry count at 50', async () => {
   const records = await extractZipEntries(zipOf(entries), dir);
   assert.equal(records.length, 50);
 });
+
+// adm-zip's addFile() sanitizes ".." itself, so a hostile entry name must be
+// forced onto the entry object directly to reproduce what a crafted/hostile
+// zip byte stream can contain.
+function zipWithRawEntryName(rawName, content) {
+  const zip = new AdmZip();
+  zip.addFile('placeholder', Buffer.from(content));
+  zip.getEntries()[0].entryName = rawName;
+  return zip.toBuffer();
+}
+
+test('extractZipEntries rejects an entry literally named ".." (zip-slip bypass)', async () => {
+  const dir = await tmpDir();
+  const parentBefore = await fs.readdir(path.dirname(dir));
+  const buf = zipWithRawEntryName('..', 'evil');
+  const records = await extractZipEntries(buf, dir);
+  assert.deepEqual(records, []);
+  const parentAfter = await fs.readdir(path.dirname(dir));
+  assert.deepEqual(parentAfter, parentBefore);
+});
+
+test('extractZipEntries rejects an entry named "foo/.." (zip-slip bypass)', async () => {
+  const dir = await tmpDir();
+  const buf = zipWithRawEntryName('foo/..', 'evil');
+  const records = await extractZipEntries(buf, dir);
+  assert.deepEqual(records, []);
+});
+
+test('extractZipEntries skips an entry when writeFile fails, without throwing', async () => {
+  const dir = await tmpDir();
+  // Make the destination path for "bad.pdf" a directory, so writeFile(filePath, data)
+  // fails with EISDIR instead of succeeding.
+  await fs.mkdir(path.join(dir, 'bad.pdf'));
+  const buf = zipOf([['bad.pdf', 'X'], ['good.pdf', 'Y']]);
+  const records = await extractZipEntries(buf, dir);
+  assert.deepEqual(records.map((r) => r.filename), ['good.pdf']);
+});
+
+test('extractZipEntries checks the byte cap before decompressing (uses header size)', async () => {
+  const dir = await tmpDir();
+  const zip = new AdmZip();
+  zip.addFile('huge.pdf', Buffer.from('small-compressed-content'));
+  const buf = zip.toBuffer();
+  const rebuilt = new AdmZip(buf);
+  // Lie about the uncompressed size in the header to simulate a single entry
+  // that would blow the cap once decompressed — the guard must reject it
+  // using header.size before calling getData(), so getData() (which would
+  // detect the size lie via CRC/size mismatch) must never even run.
+  rebuilt.getEntries()[0].header.size = 200 * 1024 * 1024;
+  const records = await extractZipEntries(rebuilt.toBuffer(), dir);
+  assert.deepEqual(records, []);
+});

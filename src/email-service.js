@@ -93,7 +93,17 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
       break;
     }
     const safeName = path.basename(entry.entryName);
-    if (!safeName) continue;
+    if (!safeName || safeName === '.' || safeName === '..') {
+      console.warn(`[warn] Skipping unsafe zip entry name "${entry.entryName}"`);
+      continue;
+    }
+
+    const entrySize = entry.header.size;
+    if (totalBytes + entrySize > MAX_ZIP_TOTAL_BYTES) {
+      console.warn('[warn] Zip uncompressed size limit reached — skipping remaining entries');
+      break;
+    }
+    totalBytes += entrySize;
 
     let data;
     try {
@@ -103,15 +113,22 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
       continue;
     }
 
-    totalBytes += data.length;
-    if (totalBytes > MAX_ZIP_TOTAL_BYTES) {
-      console.warn('[warn] Zip uncompressed size limit reached — skipping remaining entries');
-      break;
-    }
-
     const filename = uniqueName(safeName, usedNames);
     const filePath = path.join(destDir, filename);
-    await fs.writeFile(filePath, data);
+
+    // Defense-in-depth: verify the resolved path stays inside destDir even
+    // after basename() + uniqueName(), in case of unexpected path composition.
+    if (!path.resolve(destDir, filename).startsWith(path.resolve(destDir) + path.sep)) {
+      console.warn(`[warn] Skipping zip entry that resolves outside destDir: "${entry.entryName}"`);
+      continue;
+    }
+
+    try {
+      await fs.writeFile(filePath, data);
+    } catch (err) {
+      console.warn(`[warn] Could not write zip entry "${entry.entryName}": ${err.message}`);
+      continue;
+    }
     records.push({ filename, path: filePath, mimeType: inferMime(filename), sizeBytes: data.length });
   }
 
