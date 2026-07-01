@@ -4,12 +4,119 @@ import { simpleParser } from 'mailparser';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import AdmZip from 'adm-zip';
 
 // Default IMAP folder used as the "processed" marker. Overridable via
 // EMAIL_PROCESSED_LABEL. Seznam IMAP does not support custom keywords/labels,
 // so a successfully-processed email is MOVED out of INBOX into this folder.
 // Anything left in INBOX is therefore "unprocessed" and retried next run.
 export const DEFAULT_PROCESSED_LABEL = 'TRIVI';
+
+// Zip-attachment expansion safeguards (see docs spec 2026-07-01).
+const MAX_ZIP_ENTRIES = 50;
+const MAX_ZIP_TOTAL_BYTES = 100 * 1024 * 1024;
+
+const EXT_MIME = {
+  '.pdf': 'application/pdf',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.xml': 'application/xml',
+  '.isdoc': 'application/xml',
+};
+
+function inferMime(filename) {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+  return EXT_MIME[ext] || 'application/octet-stream';
+}
+
+// Return `name`, or `${i}_name` for the first i that isn't already taken.
+// Mutates `usedNames` with the chosen result.
+function uniqueName(name, usedNames) {
+  let candidate = name;
+  let i = 1;
+  while (usedNames.has(candidate)) {
+    candidate = `${i}_${name}`;
+    i += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+/**
+ * True if an attachment is a zip, by MIME (application/zip,
+ * application/x-zip-compressed) or by a .zip filename (Seznam sometimes sends
+ * zips as application/octet-stream).
+ * @param {{filename?:string, contentType?:string, mimeType?:string}} att
+ */
+export function isZipAttachment(att) {
+  const name = (att.filename || '').toLowerCase();
+  const mime = (att.contentType || att.mimeType || '').toLowerCase();
+  return (
+    mime === 'application/zip' ||
+    mime === 'application/x-zip-compressed' ||
+    name.endsWith('.zip')
+  );
+}
+
+/**
+ * Unpack a zip buffer into destDir. Best-effort: a corrupt/unreadable zip or
+ * entry is logged and skipped rather than thrown. Directory entries are
+ * ignored; entry names are flattened to basename (zip-slip guard); count and
+ * total uncompressed size are capped.
+ * @param {Buffer} buffer
+ * @param {string} destDir
+ * @param {Set<string>} [usedNames]
+ * @returns {Promise<Array<{filename:string, path:string, mimeType:string, sizeBytes:number}>>}
+ */
+export async function extractZipEntries(buffer, destDir, usedNames = new Set()) {
+  const records = [];
+  let entries;
+  try {
+    entries = new AdmZip(buffer).getEntries();
+  } catch (err) {
+    console.warn(`[warn] Could not open zip attachment: ${err.message}`);
+    return records;
+  }
+
+  let totalBytes = 0;
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    if (records.length >= MAX_ZIP_ENTRIES) {
+      console.warn(`[warn] Zip entry limit (${MAX_ZIP_ENTRIES}) reached — skipping remaining entries`);
+      break;
+    }
+    const safeName = path.basename(entry.entryName);
+    if (!safeName) continue;
+
+    let data;
+    try {
+      data = entry.getData(); // throws on encrypted/corrupt entries
+    } catch (err) {
+      console.warn(`[warn] Skipping unreadable zip entry "${entry.entryName}": ${err.message}`);
+      continue;
+    }
+
+    totalBytes += data.length;
+    if (totalBytes > MAX_ZIP_TOTAL_BYTES) {
+      console.warn('[warn] Zip uncompressed size limit reached — skipping remaining entries');
+      break;
+    }
+
+    const filename = uniqueName(safeName, usedNames);
+    const filePath = path.join(destDir, filename);
+    await fs.writeFile(filePath, data);
+    records.push({ filename, path: filePath, mimeType: inferMime(filename), sizeBytes: data.length });
+  }
+
+  return records;
+}
 
 export class EmailService {
   /**
