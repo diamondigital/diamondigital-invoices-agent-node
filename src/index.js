@@ -274,13 +274,6 @@ async function sendSummary(results, notification) {
 export const handler = async (event, context) => {
   console.log(`[lambda] Invocation: ${context.awsRequestId}`);
 
-  // Test hook: invoke with { "sentryTest": true } to force an error and verify
-  // Sentry error capture. Guarded by an explicit flag so it never fires on
-  // scheduled runs; throws before any config load / IMAP / TRIVI work.
-  if (event?.sentryTest) {
-    throw new Error('Sentry test error — verifying error capture');
-  }
-
   // Warm-start: reuse service instances across invocations
   if (!services) {
     services = await setup();
