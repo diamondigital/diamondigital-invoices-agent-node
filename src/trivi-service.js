@@ -109,7 +109,7 @@ export class TriviService {
 		// surfaces as the document's POZNÁMKA, and `paymentType` (singular) sets
 		// the payment method. (`note` lands in `description`, not shown as note.)
 		const scansUrl = `${this.baseUrl}${normalize(this.scansPath)}`;
-		const note = `[Vytěženo AI] ${metadata.subject || ''}`.trim();
+		const note = `${metadata.subject || ''}`.trim();
 		// TRIVI PaymentType enum: 1=BankTransfer, 2=Cash, 3=COD, 4=Card.
 		const PAYMENT_TYPE_CODES = { bank_transfer: 1, cash: 2, cod: 3, card: 4 };
 		const paymentType = PAYMENT_TYPE_CODES[metadata.classification?.paymentMethod];
