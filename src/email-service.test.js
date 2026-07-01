@@ -152,3 +152,21 @@ test('materializeAttachments skips attachments with no filename', async () => {
   const records = await materializeAttachments(parsed, dir);
   assert.deepEqual(records, []);
 });
+
+test('materializeAttachments de-collides a zip entry against a same-named direct attachment', async () => {
+  const dir = await tmpDir();
+  const zipBuf = zipOf([['dup.pdf', 'FROM-ZIP']]);
+  const parsed = [
+    { filename: 'pack.zip', content: zipBuf, contentType: 'application/zip', size: zipBuf.length },
+    { filename: 'dup.pdf', content: Buffer.from('DIRECT'), contentType: 'application/pdf', size: 6 },
+  ];
+  const records = await materializeAttachments(parsed, dir);
+  assert.equal(records.length, 2);
+  const names = records.map((r) => r.filename);
+  assert.equal(new Set(names).size, 2, 'filenames must be distinct');
+  assert.ok(names.includes('dup.pdf'));
+  // Every record points at a real, distinct file on disk.
+  const paths = new Set(records.map((r) => r.path));
+  assert.equal(paths.size, 2);
+  for (const r of records) await fs.access(r.path);
+});
