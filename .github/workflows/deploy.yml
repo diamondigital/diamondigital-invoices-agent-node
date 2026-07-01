@@ -1,0 +1,72 @@
+name: Deploy to Lambda
+
+# Build the container image, push it to ECR, and update the Lambda function
+# on every push to main. Auth to AWS is via GitHub OIDC (no long-lived keys) —
+# the assumed role is scoped to this repo's main branch (see terraform/github-oidc.tf).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "Dockerfile"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-lambda
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  PROJECT_NAME: diamondigital-invoices-agent-node
+  ROLE_ARN: arn:aws:iam::711928969932:role/github-actions-invoices-deploy
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          provenance: false # Lambda rejects the OCI attestation manifest
+          sbom: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}:latest
+
+      - name: Update Lambda function code
+        run: |
+          IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}@${{ steps.build.outputs.digest }}"
+          echo "Deploying image: $IMAGE"
+          aws lambda update-function-code \
+            --function-name "$PROJECT_NAME" \
+            --image-uri "$IMAGE" \
+            --region "$AWS_REGION" \
+            --query '[FunctionName,LastUpdateStatus]' --output text
+          aws lambda wait function-updated \
+            --function-name "$PROJECT_NAME" --region "$AWS_REGION"
+          aws lambda get-function-configuration \
+            --function-name "$PROJECT_NAME" --region "$AWS_REGION" \
+            --query '[LastUpdateStatus,State,LastModified]' --output text
