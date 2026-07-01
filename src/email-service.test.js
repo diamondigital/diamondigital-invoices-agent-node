@@ -170,3 +170,46 @@ test('materializeAttachments de-collides a zip entry against a same-named direct
   assert.equal(paths.size, 2);
   for (const r of records) await fs.access(r.path);
 });
+
+// A java.io byte[] serialization envelope, as the ČÚZK portal prepends to PDFs.
+const JAVA_ENVELOPE = Buffer.from([
+  0xac, 0xed, 0x00, 0x05, 0x75, 0x72, 0x00, 0x02, 0x5b, 0x42,
+]);
+
+test('extractZipEntries strips a java-serialization envelope before %PDF', async () => {
+  const dir = await tmpDir();
+  const pdf = Buffer.from('%PDF-1.5\nreal content\n%%EOF');
+  const wrapped = Buffer.concat([JAVA_ENVELOPE, pdf]);
+  const records = await extractZipEntries(zipOf([['doklad.pdf', wrapped]]), dir);
+  assert.equal(records.length, 1);
+  const written = await fs.readFile(records[0].path);
+  assert.ok(written.subarray(0, 4).equals(Buffer.from('%PDF')), 'written file starts with %PDF');
+  assert.equal(records[0].sizeBytes, pdf.length);
+});
+
+test('extractZipEntries leaves a clean %PDF file untouched', async () => {
+  const dir = await tmpDir();
+  const pdf = Buffer.from('%PDF-1.4\nclean\n%%EOF');
+  const records = await extractZipEntries(zipOf([['clean.pdf', pdf]]), dir);
+  const written = await fs.readFile(records[0].path);
+  assert.ok(written.equals(pdf));
+});
+
+test('extractZipEntries does not strip non-document types even if they contain %PDF', async () => {
+  const dir = await tmpDir();
+  const png = Buffer.concat([Buffer.from([0xac, 0xed]), Buffer.from('junk %PDF junk')]);
+  const records = await extractZipEntries(zipOf([['image.png', png]]), dir);
+  const written = await fs.readFile(records[0].path);
+  assert.ok(written.equals(png), 'png left untouched');
+});
+
+test('materializeAttachments strips a java envelope from a direct pdf attachment', async () => {
+  const dir = await tmpDir();
+  const pdf = Buffer.from('%PDF-1.5\nx\n%%EOF');
+  const wrapped = Buffer.concat([JAVA_ENVELOPE, pdf]);
+  const parsed = [{ filename: 'doklad.pdf', content: wrapped, contentType: 'application/pdf', size: wrapped.length }];
+  const records = await materializeAttachments(parsed, dir);
+  const written = await fs.readFile(records[0].path);
+  assert.ok(written.subarray(0, 4).equals(Buffer.from('%PDF')));
+  assert.equal(records[0].sizeBytes, pdf.length);
+});

@@ -36,6 +36,35 @@ function inferMime(filename) {
   return EXT_MIME[ext] || 'application/octet-stream';
 }
 
+// Magic marker each document type must start with. Some Java-based senders
+// (e.g. the ČÚZK portal) deliver a document wrapped in a java.io serialization
+// envelope — a byte[] stream header (0xAC 0xED 0x00 0x05 …) prepended before
+// the real content — which strict validators like TRIVI reject as
+// octet-stream. Mistral OCR is lenient and reads it anyway, so it slips past
+// classification and only fails at upload.
+const DOC_MAGIC = {
+  '.pdf': Buffer.from('%PDF'),
+  '.xml': Buffer.from('<?xml'),
+  '.isdoc': Buffer.from('<?xml'),
+};
+
+// If a document-typed file doesn't start with its magic marker but contains it,
+// drop the leading bytes. Only trims a known leading envelope; other types and
+// already-clean files are returned unchanged.
+function normalizeDocumentContent(data, filename) {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+  const magic = DOC_MAGIC[ext];
+  if (!magic) return data;
+  if (data.length >= magic.length && data.subarray(0, magic.length).equals(magic)) return data;
+  const idx = data.indexOf(magic);
+  if (idx > 0) {
+    console.warn(`[warn] Stripped ${idx} leading byte(s) before ${magic} marker in "${filename}"`);
+    return data.subarray(idx);
+  }
+  return data;
+}
+
 // Return `name`, or `${i}_name` for the first i that isn't already taken.
 // Mutates `usedNames` with the chosen result.
 function uniqueName(name, usedNames) {
@@ -123,13 +152,14 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
       continue;
     }
 
+    const content = normalizeDocumentContent(data, filename);
     try {
-      await fs.writeFile(filePath, data);
+      await fs.writeFile(filePath, content);
     } catch (err) {
       console.warn(`[warn] Could not write zip entry "${entry.entryName}": ${err.message}`);
       continue;
     }
-    records.push({ filename, path: filePath, mimeType: inferMime(filename), sizeBytes: data.length });
+    records.push({ filename, path: filePath, mimeType: inferMime(filename), sizeBytes: content.length });
   }
 
   return records;
@@ -159,8 +189,9 @@ export async function materializeAttachments(parsedAttachments, destDir) {
 
     const filename = uniqueName(path.basename(att.filename), usedNames);
     const filePath = path.join(destDir, filename);
-    await fs.writeFile(filePath, att.content);
-    attachments.push({ filename, path: filePath, mimeType: att.contentType, sizeBytes: att.size });
+    const content = normalizeDocumentContent(att.content, filename);
+    await fs.writeFile(filePath, content);
+    attachments.push({ filename, path: filePath, mimeType: att.contentType, sizeBytes: content.length });
   }
   return attachments;
 }
