@@ -135,6 +135,36 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
   return records;
 }
 
+/**
+ * Turn mailparser attachments into pipeline attachment records in destDir.
+ * Zip attachments are expanded (the zip itself is dropped); everything else is
+ * written through. Filenames are de-collided across the whole email.
+ * @param {Array<{filename?:string, content:Buffer, contentType?:string, size?:number}>} parsedAttachments
+ * @param {string} destDir
+ * @returns {Promise<Array<{filename:string, path:string, mimeType:string, sizeBytes:number}>>}
+ */
+export async function materializeAttachments(parsedAttachments, destDir) {
+  const attachments = [];
+  const usedNames = new Set();
+  for (const att of parsedAttachments) {
+    if (!att.filename) continue;
+
+    if (isZipAttachment(att)) {
+      console.log(`[email] Expanding zip attachment: ${att.filename}`);
+      const extracted = await extractZipEntries(att.content, destDir, usedNames);
+      console.log(`[email] Extracted ${extracted.length} file(s) from ${att.filename}`);
+      attachments.push(...extracted);
+      continue;
+    }
+
+    const filename = uniqueName(path.basename(att.filename), usedNames);
+    const filePath = path.join(destDir, filename);
+    await fs.writeFile(filePath, att.content);
+    attachments.push({ filename, path: filePath, mimeType: att.contentType, sizeBytes: att.size });
+  }
+  return attachments;
+}
+
 export class EmailService {
   /**
    * @param {{ host: string, port: number, secure: boolean, user: string, password: string, processedLabel?: string, skippedFolder?: string }} config
@@ -192,18 +222,7 @@ export class EmailService {
           const parsed = await simpleParser(msg.source);
           const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'invoice-'));
 
-          const attachments = [];
-          for (const att of parsed.attachments || []) {
-            if (!att.filename) continue;
-            const filePath = path.join(tempDir, att.filename);
-            await fs.writeFile(filePath, att.content);
-            attachments.push({
-              filename: att.filename,
-              path: filePath,
-              mimeType: att.contentType,
-              sizeBytes: att.size,
-            });
-          }
+          const attachments = await materializeAttachments(parsed.attachments || [], tempDir);
 
           results.push({
             emailId: String(msg.uid),

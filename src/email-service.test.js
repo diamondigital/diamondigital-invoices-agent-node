@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import AdmZip from 'adm-zip';
 
-import { isZipAttachment, extractZipEntries } from './email-service.js';
+import { isZipAttachment, extractZipEntries, materializeAttachments } from './email-service.js';
 
 async function tmpDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'ziptest-'));
@@ -119,5 +119,36 @@ test('extractZipEntries checks the byte cap before decompressing (uses header si
   // detect the size lie via CRC/size mismatch) must never even run.
   rebuilt.getEntries()[0].header.size = 200 * 1024 * 1024;
   const records = await extractZipEntries(rebuilt.toBuffer(), dir);
+  assert.deepEqual(records, []);
+});
+
+test('materializeAttachments expands zips and passes through normal files', async () => {
+  const dir = await tmpDir();
+  const zipBuf = zipOf([['inv1.pdf', 'A'], ['inv2.pdf', 'B']]);
+  const parsed = [
+    { filename: 'pack.zip', content: zipBuf, contentType: 'application/zip', size: zipBuf.length },
+    { filename: 'direct.pdf', content: Buffer.from('DIRECT'), contentType: 'application/pdf', size: 6 },
+  ];
+  const records = await materializeAttachments(parsed, dir);
+  const names = records.map((r) => r.filename).sort();
+  assert.deepEqual(names, ['direct.pdf', 'inv1.pdf', 'inv2.pdf']);
+  assert.equal(records.find((r) => r.filename === 'pack.zip'), undefined);
+});
+
+test('materializeAttachments skips a corrupt zip but keeps other attachments', async () => {
+  const dir = await tmpDir();
+  const parsed = [
+    { filename: 'bad.zip', content: Buffer.from('nope'), contentType: 'application/zip', size: 4 },
+    { filename: 'good.pdf', content: Buffer.from('OK'), contentType: 'application/pdf', size: 2 },
+  ];
+  const records = await materializeAttachments(parsed, dir);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].filename, 'good.pdf');
+});
+
+test('materializeAttachments skips attachments with no filename', async () => {
+  const dir = await tmpDir();
+  const parsed = [{ content: Buffer.from('X'), contentType: 'application/pdf', size: 1 }];
+  const records = await materializeAttachments(parsed, dir);
   assert.deepEqual(records, []);
 });
