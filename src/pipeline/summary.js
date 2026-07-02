@@ -1,7 +1,13 @@
+function classifyResults(results) {
+	return {
+		ok: results.filter(r => r.success),
+		skip: results.filter(r => !r.success && r.skipped),
+		fail: results.filter(r => !r.success && !r.skipped),
+	};
+}
+
 export function buildSummaryLines(results) {
-	const ok = results.filter(r => r.success);
-	const skip = results.filter(r => !r.success && r.skipped);
-	const fail = results.filter(r => !r.success && !r.skipped);
+	const { ok, skip, fail } = classifyResults(results);
 
 	const lines = [
 		'📊 Diamondigital Documents Upload — Denní přehled',
@@ -45,7 +51,7 @@ export function buildSummaryLines(results) {
 }
 
 export async function sendSummary(results, notification) {
-	const fail = results.filter(r => !r.success && !r.skipped);
+	const { fail } = classifyResults(results);
 	const lines = buildSummaryLines(results);
 
 	if (fail.length > 0) {

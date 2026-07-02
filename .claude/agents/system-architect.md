@@ -14,21 +14,18 @@ Single-purpose pipeline: **IMAP email → filter invoice attachments → upload 
 running as an AWS Lambda. One file = one concern. State lives in IMAP (INBOX = work
 queue, the `TRIVI` folder = done). See the flow diagram and layer table in `AGENTS.md`.
 
-Legacy/unused: `src/invoice-extractor.js`, `src/finaccount-mapper.js`. Do not route work
-into them unless the request is explicitly about reviving invoice issuing.
-
 ## Routing guide (request → likely files)
 
 | Request is about… | Start here |
 |---|---|
-| Which emails/attachments get picked up | `handler.js` (`isInvoiceAttachment`), `email-service.js` (`fetchUnprocessedEmails`) |
-| How "processed" is tracked, reprocessing, duplicates | `email-service.js` (`markAsProcessed`), `handler.js` ordering, invariant #4 |
-| Upload behavior, endpoint, multipart fields | `trivi-service.js` (`uploadDocumentAttachment`), env `TRIVI_*` |
-| Auth / tokens | `trivi-auth.js` |
+| Which emails/attachments get picked up | [src/pipeline/attachment-filter.js](src/pipeline/attachment-filter.js) (`isInvoiceAttachment`), [src/email/client.js](src/email/client.js) (`fetchUnprocessedEmails`) |
+| How "processed" is tracked, reprocessing, duplicates | [src/email/client.js](src/email/client.js) (`markAsProcessed`), [src/pipeline/run.js](src/pipeline/run.js) ordering, invariant #4 |
+| Upload behavior, endpoint, multipart fields | [src/trivi/upload.js](src/trivi/upload.js) (`uploadDocumentAttachment`), env `TRIVI_*` |
+| Auth / tokens | [src/trivi/auth.js](src/trivi/auth.js) |
 | Env vars, secrets, local vs prod | `config.js`, `.env.example`, `LOCAL_AWS_SWITCH_NOTE.md` |
-| Retries / backoff | `retry.js`, the `withRetry` wrap in `handler.js` setup |
-| Notifications / daily summary / alerts | `notification-service.js`, `sendSummary` in `handler.js` |
-| Audit archive | `storage-service.js` |
+| Retries / backoff | `retry.js`, the `withRetry` wrap in [src/pipeline/run.js](src/pipeline/run.js) |
+| Notifications / daily summary / alerts | [src/aws/notifications.js](src/aws/notifications.js), `sendSummary` in [src/pipeline/summary.js](src/pipeline/summary.js) |
+| Audit archive | [src/aws/storage.js](src/aws/storage.js) |
 | Deploy, schedule, infra, IAM | `terraform/`, `Dockerfile`, `docker-compose.yml` |
 
 ## Method

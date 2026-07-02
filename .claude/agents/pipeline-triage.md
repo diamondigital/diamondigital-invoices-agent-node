@@ -12,23 +12,23 @@ to a single pipeline stage and propose the smallest correct fix — not to rewri
 
 1. **Config load** — [src/config.js](src/config.js). `requireEnv` throws on missing
    `EMAIL_*` / `TRIVI_APP_*`. `SECRET_NAME` set → Secrets Manager path; empty → `.env`.
-2. **IMAP fetch** — [src/email-service.js](src/email-service.js) `fetchUnprocessedEmails`.
+2. **IMAP fetch** — [src/email/client.js](src/email/client.js) `fetchUnprocessedEmails`.
    This is the only **fatal** stage (rethrow → DLQ, alert sent). Symptoms: connection
    refused, auth failure, TLS. Check host/port/secure/user/password.
-3. **Attachment filter** — [src/handler.js](src/handler.js) `isInvoiceAttachment`. An email
+3. **Attachment filter** — [src/pipeline/attachment-filter.js](src/pipeline/attachment-filter.js) `isInvoiceAttachment`. An email
    "skipped (no invoice attachment)" means neither extension (`INVOICE_ATTACHMENT_EXTENSIONS`)
    nor MIME (`INVOICE_ATTACHMENT_MIME_TYPES`) matched. Verify the real filename/MIME.
-4. **TRIVI auth** — [src/trivi-auth.js](src/trivi-auth.js). Token cached with 5-min
+4. **TRIVI auth** — [src/trivi/auth.js](src/trivi/auth.js). Token cached with 5-min
    buffer. Symptoms: 401/403 on upload → bad `appId`/`appSecret` or token endpoint change.
-5. **TRIVI upload** — [src/trivi-service.js](src/trivi-service.js) `uploadDocumentAttachment`.
+5. **TRIVI upload** — [src/trivi/upload.js](src/trivi/upload.js) `uploadDocumentAttachment`.
    **Key failure: response is HTML (`<!doctype`)** → wrong endpoint path
    (`TRIVI_UPLOADED_DOCUMENTS_PATH` / `TRIVI_BASE_URL`). Wrapped in `withRetry(3×)`, so a
    transient error retries 3 times before surfacing.
-6. **S3 archive** — [src/storage-service.js](src/storage-service.js). Best-effort; empty
+6. **S3 archive** — [src/aws/storage.js](src/aws/storage.js). Best-effort; empty
    `S3_BUCKET` = skipped. A warn here does NOT fail the email.
 7. **Mark processed** — `markAsProcessed` moves the email out of INBOX. Best-effort warn
    on failure — but see the duplicate scenario below.
-8. **Summary/alerts** — [src/notification-service.js](src/notification-service.js). Empty
+8. **Summary/alerts** — [src/aws/notifications.js](src/aws/notifications.js). Empty
    `SNS_TOPIC_ARN` = log only.
 
 ## High-value scenarios to check first
