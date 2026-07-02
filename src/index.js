@@ -6,7 +6,7 @@ import { EmailService } from './email-service.js';
 import { StorageService } from './storage-service.js';
 import { NotificationService } from './notification-service.js';
 import { DocumentClassifier } from './document-classifier.js';
-import { withRetry } from './retry.js';
+import { withRetry } from './lib/retry.js';
 import fs from 'node:fs/promises';
 
 // ─── Warm-start cache ──────────────────────────────────

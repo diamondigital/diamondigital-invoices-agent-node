@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import AdmZip from 'adm-zip';
-import { needsPngConversion, toPng, toPngFilename } from './image-conversion.js';
+import { needsPngConversion, toPng, toPngFilename } from './lib/image.js';
 
 // Default IMAP folder used as the "processed" marker. Overridable via
 // EMAIL_PROCESSED_LABEL. Seznam IMAP does not support custom keywords/labels,

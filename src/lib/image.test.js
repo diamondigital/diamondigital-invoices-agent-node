@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
-import { needsPngConversion, toPng, toPngFilename } from './image-conversion.js';
+import { needsPngConversion, toPng, toPngFilename } from './image.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 

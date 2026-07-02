@@ -1,14 +1,3 @@
-// src/retry.js — Exponential backoff retry wrapper
-
-/**
- * Wraps an async function with exponential backoff retry.
- * @param {Function} fn - async function to retry
- * @param {Object} [opts]
- * @param {number} [opts.maxAttempts=3]
- * @param {number} [opts.baseDelayMs=1000]
- * @param {number} [opts.maxDelayMs=30000]
- * @returns {Function} wrapped function
- */
 export function withRetry(fn, opts = {}) {
   const {
     maxAttempts = 3,
