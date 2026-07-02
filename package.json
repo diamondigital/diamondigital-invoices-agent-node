@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js --local",
-    "test": "node --test src/**/*.test.js"
+    "test": "node --test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.600.0",
