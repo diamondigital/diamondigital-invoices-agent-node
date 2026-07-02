@@ -4,7 +4,7 @@ import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-sec
 /**
  * @returns {Promise<{
  *   email: {host:string, port:number, secure:boolean, user:string, password:string, processedLabel:string, skippedFolder:string},
- *   trivi: {appId:string, appSecret:string, baseUrl:string, bankAccountId:number, uploadsPath:string, scansPath:string, uploadFieldName:string},
+ *   trivi: {appId:string, appSecret:string, baseUrl:string, uploadsPath:string, scansPath:string, uploadFieldName:string},
  *   mistral: {apiKey:string, classifierModel:string, uploadThreshold:number},
  *   notification: {snsTopicArn:string, adminEmail:string},
  *   s3: {bucketName:string}
@@ -33,7 +33,6 @@ function loadFromEnv() {
       appId: requireEnv('TRIVI_APP_ID'),
       appSecret: requireEnv('TRIVI_APP_SECRET'),
       baseUrl: process.env.TRIVI_BASE_URL || 'https://api.trivi.com/v2',
-      bankAccountId: parseInt(process.env.TRIVI_BANK_ACCOUNT_ID || '0', 10),
       // Stable TRIVI API paths — constants, not config.
       uploadsPath: '/uploads',
       scansPath: '/accountingdocuments/scans',

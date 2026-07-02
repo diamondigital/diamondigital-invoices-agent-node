@@ -10,57 +10,16 @@ export class TriviService {
    */
   constructor(config, auth) {
     this.baseUrl = config.baseUrl;
-    this.bankAccountId = config.bankAccountId;
 	  this.uploadsPath = config.uploadsPath || '/uploads';
 	  this.scansPath = config.scansPath || '/accountingdocuments/scans';
 	  this.uploadFieldName = config.uploadFieldName || 'file';
     this.auth = auth;
   }
 
-  async #headers() {
-    const token = await this.auth.getToken();
-    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-  }
-
 	async #authHeaders() {
 		const token = await this.auth.getToken();
 		return { Authorization: `Bearer ${token}` };
 	}
-
-  // ─── Accounting Documents ────────────────────────────────
-
-  async createInvoice(invoice) {
-    const headers = await this.#headers();
-    const label = invoice.orderNo || invoice.explicitNo || 'new';
-    console.log(`[trivi] Creating issued invoice: ${label}`);
-
-    const { data } = await axios.post(
-      `${this.baseUrl}/accountingdocuments`,
-      invoice,
-      { headers }
-    );
-
-    console.log(`[trivi] Invoice created: ID=${data.id}, No=${data.accountingDocumentNo}, state=${data.processingState}`);
-    return data;
-  }
-
-  async getDocument(id) {
-    const headers = await this.#headers();
-    const { data } = await axios.get(
-      `${this.baseUrl}/accountingdocuments/${id}`,
-      { headers }
-    );
-    return data;
-  }
-
-  async getDocumentIssues(id) {
-    const headers = await this.#headers();
-    const { data } = await axios.get(
-      `${this.baseUrl}/accountingdocuments/${id}/issues`,
-      { headers }
-    );
-    return (data || []).map(i => i.message || JSON.stringify(i));
-  }
 
 	/**
 	 * Upload an email attachment to TRIVI as a scanned accounting document.
@@ -132,101 +91,4 @@ export class TriviService {
 		console.log(`[trivi] Scan document created HTTP ${status}: ${JSON.stringify(data)}`);
 		return { fileId, scan: data };
 	}
-
-  // ─── Contacts ────────────────────────────────────────────
-
-  async findContactByExternalId(externalId) {
-    const headers = await this.#headers();
-    try {
-      const { data } = await axios.get(`${this.baseUrl}/contacts`, {
-        headers,
-        params: { externalId },
-      });
-      return data.length > 0 ? data[0] : null;
-    } catch (error) {
-      if (error.response?.status === 404) return null;
-      throw error;
-    }
-  }
-
-  async findContactByEmail(email) {
-    const headers = await this.#headers();
-    try {
-      const { data } = await axios.get(`${this.baseUrl}/contacts`, {
-        headers,
-        params: { email },
-      });
-      return data.length > 0 ? data[0] : null;
-    } catch (error) {
-      if (error.response?.status === 404) return null;
-      throw error;
-    }
-  }
-
-  async createContact(contact) {
-    const headers = await this.#headers();
-    console.log(`[trivi] Creating contact: ${contact.email || contact.companyName}`);
-    const { data } = await axios.post(
-      `${this.baseUrl}/contacts`,
-      contact,
-      { headers }
-    );
-    console.log(`[trivi] Contact created: ID=${data.id}`);
-    return data;
-  }
-
-  /**
-   * Get existing contact or create new one.
-   * Priority: contactId > externalId > email > create new.
-   * @returns {Promise<number>} contact ID
-   */
-  async getOrCreateContact(contact) {
-    // If contactId already known, return it
-    if (contact.contactId) return contact.contactId;
-
-    // Try externalId first (CRITICAL for repeat customers)
-    if (contact.externalId) {
-      const existing = await this.findContactByExternalId(contact.externalId);
-      if (existing) {
-        console.log(`[trivi] Found contact by externalId: ${existing.id}`);
-        return existing.id;
-      }
-    }
-
-    // Try email
-    if (contact.email) {
-      const existing = await this.findContactByEmail(contact.email);
-      if (existing) {
-        console.log(`[trivi] Found contact by email: ${existing.id}`);
-        return existing.id;
-      }
-    }
-
-    // Create new
-    const created = await this.createContact(contact);
-    return created.id;
-  }
-
-  // ─── Lookups ─────────────────────────────────────────────
-
-  async getSequences() {
-    const headers = await this.#headers();
-    const { data } = await axios.get(`${this.baseUrl}/sequences`, {
-      headers,
-      params: { type: 'noncashregister' },
-    });
-    return data;
-  }
-
-  async getVatRates() {
-    const headers = await this.#headers();
-    const { data } = await axios.get(`${this.baseUrl}/vatrates`, { headers });
-    return data;
-  }
-
-  async getBankAccounts() {
-    const headers = await this.#headers();
-    const { data } = await axios.get(`${this.baseUrl}/bankaccounts`, { headers });
-    return data;
-  }
 }
