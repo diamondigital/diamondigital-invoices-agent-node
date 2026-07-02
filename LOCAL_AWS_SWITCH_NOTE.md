@@ -25,7 +25,7 @@ In [docker-compose.yml](docker-compose.yml):
 Recommended AWS-oriented compose/service command:
 
 ```yaml
-command: ["src/index.handler"]
+command: ["src/handler.handler"]
 ```
 
 If you run the app outside Lambda and still want Node execution, use the current `node -e` invocation only for local testing.
@@ -35,9 +35,9 @@ If you run the app outside Lambda and still want Node execution, use the current
 - [src/config.js](src/config.js):
   - If `SECRET_NAME` is set -> loads from AWS Secrets Manager.
   - If `SECRET_NAME` is missing/empty -> loads from environment variables.
-- [src/trivi-service.js](src/trivi-service.js): uploaded documents default to `TRIVI_BASE_URL + /accountingdocuments/uploaded` and use multipart field `file` unless overridden.
-- [src/notification-service.js](src/notification-service.js): SNS is used only when `SNS_TOPIC_ARN` is set.
-- [src/storage-service.js](src/storage-service.js): S3 is used only when bucket is set.
+- [src/trivi/upload.js](src/trivi/upload.js): uploads go through a two-step flow — `TRIVI_BASE_URL + /uploads` (multipart field `file`) then `TRIVI_BASE_URL + /accountingdocuments/scans` — unless overridden.
+- [src/aws/notifications.js](src/aws/notifications.js): SNS is used only when `SNS_TOPIC_ARN` is set.
+- [src/aws/storage.js](src/aws/storage.js): S3 is used only when bucket is set.
 
 ## Safe deployment checklist for AWS
 
