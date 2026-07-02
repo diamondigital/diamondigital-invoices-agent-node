@@ -5,7 +5,7 @@ import { TriviService } from './trivi/upload.js';
 import { EmailService } from './email-service.js';
 import { StorageService } from './aws/storage.js';
 import { NotificationService } from './aws/notifications.js';
-import { DocumentClassifier } from './document-classifier.js';
+import { DocumentClassifier } from './classify/classifier.js';
 import { withRetry } from './lib/retry.js';
 import fs from 'node:fs/promises';
 
