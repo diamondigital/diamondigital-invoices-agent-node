@@ -1,13 +1,8 @@
-// src/trivi-service.js — TRIVI REST API v2 client
 import axios from 'axios';
 import FormData from 'form-data';
 import fs from 'node:fs';
 
 export class TriviService {
-  /**
-   * @param {import('./config.js').AppConfig['trivi']} config
-   * @param {import('./trivi-auth.js').TriviAuth} auth
-   */
   constructor(config, auth) {
     this.baseUrl = config.baseUrl;
 	  this.uploadsPath = config.uploadsPath || '/uploads';
@@ -21,18 +16,10 @@ export class TriviService {
 		return { Authorization: `Bearer ${token}` };
 	}
 
-	/**
-	 * Upload an email attachment to TRIVI as a scanned accounting document.
-	 * Two-step flow per TRIVI Public API v2:
-	 *   1. POST {uploadsPath} (multipart/form-data) → returns { id }
-	 *   2. POST {scansPath} (JSON [{ files: [id] }]) → creates the document
-	 * @returns {Promise<{ fileId: number|string, scan: any }>}
-	 */
 	async uploadDocumentAttachment(attachment, metadata = {}) {
 		const authHeaders = await this.#authHeaders();
 		const normalize = (p) => (p.startsWith('/') ? p : `/${p}`);
 
-		// ── Step 1: upload the raw file → returns a numeric file id ──
 		const form = new FormData();
 		form.append(this.uploadFieldName, fs.createReadStream(attachment.path), {
 			filename: attachment.filename,
@@ -49,7 +36,6 @@ export class TriviService {
 			maxContentLength: Infinity,
 		});
 
-		// TRIVI returns the web app HTML when the endpoint does not exist — treat as error
 		if (typeof uploadData === 'string' && uploadData.trimStart().startsWith('<!doctype')) {
 			throw new Error(
 				`TRIVI /uploads returned HTML instead of JSON. ` +
@@ -63,13 +49,8 @@ export class TriviService {
 		}
 		console.log(`[trivi] File uploaded: id=${fileId}`);
 
-		// ── Step 2: create an accounting document from the uploaded scan ──
-		// Field mapping verified against the API: scans `customerInstructions`
-		// surfaces as the document's POZNÁMKA, and `paymentType` (singular) sets
-		// the payment method. (`note` lands in `description`, not shown as note.)
 		const scansUrl = `${this.baseUrl}${normalize(this.scansPath)}`;
 		const note = `${metadata.subject || ''}`.trim();
-		// TRIVI PaymentType enum: 1=BankTransfer, 2=Cash, 3=COD, 4=Card.
 		const PAYMENT_TYPE_CODES = { bank_transfer: 1, cash: 2, cod: 3, card: 4 };
 		const paymentType = PAYMENT_TYPE_CODES[metadata.classification?.paymentMethod];
 		const item = { files: [String(fileId)], customerInstructions: note };

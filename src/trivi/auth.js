@@ -1,19 +1,14 @@
-// src/trivi-auth.js — TRIVI bearer token management (cached, auto-refresh)
 import axios from 'axios';
 
 export class TriviAuth {
   #accessToken = null;
   #expiresAt = 0;
 
-  /**
-   * @param {{ appId: string, appSecret: string }} config
-   */
   constructor(config) {
     this.config = config;
   }
 
   async getToken() {
-    // Return cached token if still valid (5 min buffer)
     if (this.#accessToken && Date.now() < this.#expiresAt - 300_000) {
       return this.#accessToken;
     }
