@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import AdmZip from 'adm-zip';
+import { needsPngConversion, toPng, toPngFilename } from './image-conversion.js';
 
 // Default IMAP folder used as the "processed" marker. Overridable via
 // EMAIL_PROCESSED_LABEL. Seznam IMAP does not support custom keywords/labels,
@@ -79,6 +80,57 @@ function uniqueName(name, usedNames) {
 }
 
 /**
+ * Convert (if needed), de-collide, path-guard, normalize, and write one
+ * attachment into destDir, returning its record. Returns null when a required
+ * PNG conversion fails or the file cannot be written — the caller then skips
+ * that attachment so a bad file never stalls the whole email.
+ * @param {Buffer} rawBuffer
+ * @param {string} rawName
+ * @param {string|undefined} mimeType
+ * @param {string} destDir
+ * @param {Set<string>} usedNames
+ * @returns {Promise<{filename:string, path:string, mimeType:string, sizeBytes:number}|null>}
+ */
+async function writeAttachmentRecord(rawBuffer, rawName, mimeType, destDir, usedNames) {
+  let data = rawBuffer;
+  let baseName = path.basename(rawName);
+  let outMime = mimeType;
+
+  // TRIVI rejects HEIC/HEIF/WebP/TIFF — transcode to PNG before writing.
+  if (needsPngConversion(baseName, mimeType)) {
+    const dot = baseName.lastIndexOf('.');
+    const ext = dot >= 0 ? baseName.slice(dot).toLowerCase() : '';
+    try {
+      data = await toPng(rawBuffer, ext, mimeType);
+      baseName = toPngFilename(baseName);
+      outMime = 'image/png';
+      console.log(`[email] Converted "${rawName}" → "${baseName}" (TRIVI-safe PNG)`);
+    } catch (err) {
+      console.warn(`[warn] Could not convert "${rawName}" to PNG — skipping: ${err.message}`);
+      return null;
+    }
+  }
+
+  const filename = uniqueName(baseName, usedNames);
+  const filePath = path.join(destDir, filename);
+
+  // Defense-in-depth: the resolved path must stay inside destDir.
+  if (!path.resolve(destDir, filename).startsWith(path.resolve(destDir) + path.sep)) {
+    console.warn(`[warn] Skipping attachment that resolves outside destDir: "${rawName}"`);
+    return null;
+  }
+
+  const content = normalizeDocumentContent(data, filename);
+  try {
+    await fs.writeFile(filePath, content);
+  } catch (err) {
+    console.warn(`[warn] Could not write attachment "${rawName}": ${err.message}`);
+    return null;
+  }
+  return { filename, path: filePath, mimeType: outMime || inferMime(filename), sizeBytes: content.length };
+}
+
+/**
  * True if an attachment is a zip, by MIME (application/zip,
  * application/x-zip-compressed) or by a .zip filename (Seznam sometimes sends
  * zips as application/octet-stream).
@@ -142,24 +194,8 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
       continue;
     }
 
-    const filename = uniqueName(safeName, usedNames);
-    const filePath = path.join(destDir, filename);
-
-    // Defense-in-depth: verify the resolved path stays inside destDir even
-    // after basename() + uniqueName(), in case of unexpected path composition.
-    if (!path.resolve(destDir, filename).startsWith(path.resolve(destDir) + path.sep)) {
-      console.warn(`[warn] Skipping zip entry that resolves outside destDir: "${entry.entryName}"`);
-      continue;
-    }
-
-    const content = normalizeDocumentContent(data, filename);
-    try {
-      await fs.writeFile(filePath, content);
-    } catch (err) {
-      console.warn(`[warn] Could not write zip entry "${entry.entryName}": ${err.message}`);
-      continue;
-    }
-    records.push({ filename, path: filePath, mimeType: inferMime(filename), sizeBytes: content.length });
+    const rec = await writeAttachmentRecord(data, safeName, inferMime(safeName), destDir, usedNames);
+    if (rec) records.push(rec);
   }
 
   return records;
@@ -187,11 +223,8 @@ export async function materializeAttachments(parsedAttachments, destDir) {
       continue;
     }
 
-    const filename = uniqueName(path.basename(att.filename), usedNames);
-    const filePath = path.join(destDir, filename);
-    const content = normalizeDocumentContent(att.content, filename);
-    await fs.writeFile(filePath, content);
-    attachments.push({ filename, path: filePath, mimeType: att.contentType, sizeBytes: content.length });
+    const rec = await writeAttachmentRecord(att.content, att.filename, att.contentType, destDir, usedNames);
+    if (rec) attachments.push(rec);
   }
   return attachments;
 }

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import AdmZip from 'adm-zip';
+import sharp from 'sharp';
 
 import { isZipAttachment, extractZipEntries, materializeAttachments } from './email-service.js';
 
@@ -212,4 +213,37 @@ test('materializeAttachments strips a java envelope from a direct pdf attachment
   const written = await fs.readFile(records[0].path);
   assert.ok(written.subarray(0, 4).equals(Buffer.from('%PDF')));
   assert.equal(records[0].sizeBytes, pdf.length);
+});
+
+async function webpBuffer() {
+  return sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+    .webp().toBuffer();
+}
+
+test('materializeAttachments converts a WebP attachment to PNG', async () => {
+  const dir = await tmpDir();
+  const records = await materializeAttachments(
+    [{ filename: 'receipt.webp', content: await webpBuffer(), contentType: 'image/webp' }],
+    dir,
+  );
+  assert.equal(records.length, 1);
+  assert.equal(records[0].filename, 'receipt.png');
+  assert.equal(records[0].mimeType, 'image/png');
+  const onDisk = await fs.readFile(records[0].path);
+  assert.equal(onDisk[0], 0x89);
+  assert.equal(onDisk.subarray(1, 4).toString('latin1'), 'PNG');
+  assert.equal(onDisk.length, records[0].sizeBytes);
+});
+
+test('materializeAttachments skips an unconvertible image but keeps others', async () => {
+  const dir = await tmpDir();
+  const records = await materializeAttachments(
+    [
+      { filename: 'broken.webp', content: Buffer.from('not an image'), contentType: 'image/webp' },
+      { filename: 'good.pdf', content: Buffer.from('%PDF-1.4 body'), contentType: 'application/pdf' },
+    ],
+    dir,
+  );
+  assert.equal(records.length, 1);
+  assert.equal(records[0].filename, 'good.pdf');
 });
