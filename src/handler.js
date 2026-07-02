@@ -1,4 +1,3 @@
-// src/index.js — AWS Lambda handler: Diamondigital Documents Upload Agent
 import { loadConfig } from './config.js';
 import { TriviAuth } from './trivi/auth.js';
 import { TriviService } from './trivi/upload.js';
@@ -9,20 +8,16 @@ import { DocumentClassifier } from './classify/classifier.js';
 import { withRetry } from './lib/retry.js';
 import { processInvoices } from './pipeline/run.js';
 
-// ─── Warm-start cache ──────────────────────────────────
-
-/** @type {Awaited<ReturnType<typeof setup>> | null} */
 let services = null;
 
 async function setup() {
   const cfg = await loadConfig();
   const triviAuth = new TriviAuth(cfg.trivi);
-	const trivi = new TriviService(cfg.trivi, triviAuth);
+  const trivi = new TriviService(cfg.trivi, triviAuth);
   const email = new EmailService(cfg.email);
   const storage = new StorageService(cfg.s3);
   const notification = new NotificationService(cfg.notification);
 
-  // Mistral classifier gates uploads; disabled (with a warning) if no API key.
   const classifier = cfg.mistral.apiKey
     ? new DocumentClassifier(cfg.mistral)
     : null;
@@ -30,26 +25,17 @@ async function setup() {
     console.warn('[setup] MISTRAL_API_KEY missing — classification disabled, all invoice-like attachments will be uploaded');
   }
 
-  // Wrap critical TRIVI calls with retry
-	trivi.uploadDocumentAttachment = withRetry(trivi.uploadDocumentAttachment.bind(trivi), {
+  trivi.uploadDocumentAttachment = withRetry(trivi.uploadDocumentAttachment.bind(trivi), {
     maxAttempts: 3, baseDelayMs: 1000,
-	});
+  });
 
   console.log('[setup] Services initialized');
-	return { cfg, trivi, email, storage, notification, classifier };
+  return { cfg, trivi, email, storage, notification, classifier };
 }
 
-// ─── Lambda Handler ────────────────────────────────────
-
-/**
- * AWS Lambda entry point.
- * @param {any} event
- * @param {import('aws-lambda').Context} context
- */
 export const handler = async (event, context) => {
   console.log(`[lambda] Invocation: ${context.awsRequestId}`);
 
-  // Warm-start: reuse service instances across invocations
   if (!services) {
     services = await setup();
   }
@@ -59,13 +45,10 @@ export const handler = async (event, context) => {
     results = await processInvoices(services);
   } catch (error) {
     console.error(`[lambda] Fatal error: ${error.message}`);
-    // Re-throw to trigger Lambda retry / DLQ
     throw error;
   }
 
   const ok = results.filter(r => r.success).length;
-  // Skipped (no accounting document) is an expected outcome, not a failure —
-  // only genuine errors (left in INBOX for retry) count as failed.
   const skipped = results.filter(r => !r.success && r.skipped).length;
   const fail = results.filter(r => !r.success && !r.skipped).length;
 

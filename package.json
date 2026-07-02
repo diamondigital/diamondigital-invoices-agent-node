@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js --local",
+    "start": "node src/handler.js",
+    "dev": "node --watch src/handler.js --local",
     "test": "node --test"
   },
   "dependencies": {

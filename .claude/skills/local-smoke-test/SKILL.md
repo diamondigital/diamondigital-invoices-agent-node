@@ -33,9 +33,9 @@ empty, and invokes `handler({}, { awsRequestId: 'docker-local-run' })` via `node
 
 Option B — node directly:
 ```bash
-npm run dev     # node --watch src/index.js --local
+npm run dev     # node --watch src/handler.js --local
 # or invoke the handler:
-node -e "import('./src/index.js').then(({handler}) => handler({}, {awsRequestId:'local'})).then(console.log)"
+node -e "import('./src/handler.js').then(({handler}) => handler({}, {awsRequestId:'local'})).then(console.log)"
 ```
 
 ## Read the result

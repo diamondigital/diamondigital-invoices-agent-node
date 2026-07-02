@@ -15,7 +15,7 @@ to a single pipeline stage and propose the smallest correct fix — not to rewri
 2. **IMAP fetch** — [src/email-service.js](src/email-service.js) `fetchUnprocessedEmails`.
    This is the only **fatal** stage (rethrow → DLQ, alert sent). Symptoms: connection
    refused, auth failure, TLS. Check host/port/secure/user/password.
-3. **Attachment filter** — [src/index.js](src/index.js) `isInvoiceAttachment`. An email
+3. **Attachment filter** — [src/handler.js](src/handler.js) `isInvoiceAttachment`. An email
    "skipped (no invoice attachment)" means neither extension (`INVOICE_ATTACHMENT_EXTENSIONS`)
    nor MIME (`INVOICE_ATTACHMENT_MIME_TYPES`) matched. Verify the real filename/MIME.
 4. **TRIVI auth** — [src/trivi-auth.js](src/trivi-auth.js). Token cached with 5-min

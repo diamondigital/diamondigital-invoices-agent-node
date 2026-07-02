@@ -14,4 +14,4 @@ services:
       - S3_BUCKET=
     command:
       - -e
-      - "import('./src/index.js').then(async ({ handler }) => { const res = await handler({}, { awsRequestId: 'docker-local-run' }); console.log(res); }).catch((err) => { console.error(err); process.exit(1); });"
+      - "import('./src/handler.js').then(async ({ handler }) => { const res = await handler({}, { awsRequestId: 'docker-local-run' }); console.log(res); }).catch((err) => { console.error(err); process.exit(1); });"

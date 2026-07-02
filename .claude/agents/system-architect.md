@@ -21,13 +21,13 @@ into them unless the request is explicitly about reviving invoice issuing.
 
 | Request is about… | Start here |
 |---|---|
-| Which emails/attachments get picked up | `index.js` (`isInvoiceAttachment`), `email-service.js` (`fetchUnprocessedEmails`) |
-| How "processed" is tracked, reprocessing, duplicates | `email-service.js` (`markAsProcessed`), `index.js` ordering, invariant #4 |
+| Which emails/attachments get picked up | `handler.js` (`isInvoiceAttachment`), `email-service.js` (`fetchUnprocessedEmails`) |
+| How "processed" is tracked, reprocessing, duplicates | `email-service.js` (`markAsProcessed`), `handler.js` ordering, invariant #4 |
 | Upload behavior, endpoint, multipart fields | `trivi-service.js` (`uploadDocumentAttachment`), env `TRIVI_*` |
 | Auth / tokens | `trivi-auth.js` |
 | Env vars, secrets, local vs prod | `config.js`, `.env.example`, `LOCAL_AWS_SWITCH_NOTE.md` |
-| Retries / backoff | `retry.js`, the `withRetry` wrap in `index.js` setup |
-| Notifications / daily summary / alerts | `notification-service.js`, `sendSummary` in `index.js` |
+| Retries / backoff | `retry.js`, the `withRetry` wrap in `handler.js` setup |
+| Notifications / daily summary / alerts | `notification-service.js`, `sendSummary` in `handler.js` |
 | Audit archive | `storage-service.js` |
 | Deploy, schedule, infra, IAM | `terraform/`, `Dockerfile`, `docker-compose.yml` |
 
