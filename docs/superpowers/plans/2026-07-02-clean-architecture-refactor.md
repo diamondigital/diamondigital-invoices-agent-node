@@ -164,8 +164,9 @@ Expected: FAIL — cannot find `./retry.js`.
 git mv src/retry.js src/lib/retry.js
 git mv src/image-conversion.js src/lib/image.js
 git mv src/image-conversion.test.js src/lib/image.test.js
+git mv src/fixtures src/lib/fixtures
 ```
-Then delete every comment from `src/lib/retry.js` and `src/lib/image.js`. In `src/lib/image.test.js`, the import `./image-conversion.js` becomes `./image.js`.
+Then delete every comment from `src/lib/retry.js` and `src/lib/image.js`. In `src/lib/image.test.js`, the import `./image-conversion.js` becomes `./image.js`. The fixture read stays `path.join(here, 'fixtures', 'sample.heic')` — it now resolves to `src/lib/fixtures/sample.heic` because both the test and the fixtures moved into `src/lib/`. The `email` materialize tests do NOT use these fixtures (they generate buffers with `sharp`/`AdmZip`), so `src/lib/fixtures/` is the fixtures' permanent home.
 
 - [ ] **Step 4: Fix importers**
 
@@ -411,8 +412,9 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Create: `src/email/client.js` (IMAP), `src/email/materialize.js` (attachment handling)
-- Move: `src/email-service.test.js` → `src/email/materialize.test.js`; `src/fixtures/` → `src/email/fixtures/`
+- Move: `src/email-service.test.js` → `src/email/materialize.test.js`
 - Delete: `src/email-service.js`
+- (Fixtures already live at `src/lib/fixtures/` from Task 2 and stay there — the email tests do not use them.)
 - Modify importer: `src/index.js`
 
 **Interfaces:**
@@ -423,28 +425,20 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 `git mv src/email-service.js src/email/materialize.js` after `mkdir -p src/email`. From `materialize.js` remove the `EmailService` class entirely and move it into a new `src/email/client.js` that imports `materializeAttachments` and `DEFAULT_PROCESSED_LABEL` from `./materialize.js` and keeps the `imapflow`/`mailparser`/`fs`/`path`/`os` imports it actually uses. `materialize.js` keeps `imapflow`? No — `materialize.js` drops the `ImapFlow` import; it keeps `mailparser`? No — it keeps `fs`, `path`, `os`, `AdmZip`, and the `../lib/image.js` import. Ensure `DEFAULT_PROCESSED_LABEL` is exported from `materialize.js` (or move it to `client.js` and export there — pick `materialize.js` for stability) and re-imported by `client.js`.
 
-- [ ] **Step 2: Strip comments and fix the fixture path**
+- [ ] **Step 2: Strip comments and fix the test import**
 
-Delete every comment from both files. Move fixtures:
-```bash
-git mv src/fixtures src/email/fixtures
-```
-In `src/email/materialize.test.js` (moved), fix the import from `./email-service.js` → `./materialize.js`, and any `fixtures/` path if referenced (the image/HEIC fixtures are used by `lib/image.test.js`, which references `fixtures/sample.heic` relative to `src/lib/` — see note below).
+Delete every comment from both files. In `src/email/materialize.test.js` (moved), fix the import from `./email-service.js` → `./materialize.js`. These tests generate their own buffers (`sharp`/`AdmZip`) and reference no fixture files, so nothing under `src/lib/fixtures/` is touched here.
 
-- [ ] **Step 3: Reconcile the HEIC fixture location**
-
-`src/lib/image.test.js` reads `fixtures/sample.heic` relative to its own dir. Since fixtures now live at `src/email/fixtures/`, update `src/lib/image.test.js` to read `../email/fixtures/sample.heic`. (Alternatively keep a copy under `src/lib/fixtures/`; prefer the single shared location under `src/email/fixtures/` and the relative import.)
-
-- [ ] **Step 4: Fix importer**
+- [ ] **Step 3: Fix importer**
 
 In `src/index.js`: `import { EmailService } from './email-service.js';` → `'./email/client.js'`.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 4: Run tests**
 
 Run: `npm test`
 Expected: full suite 37 (the moved materialize + image tests pass at their new paths).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add -A
