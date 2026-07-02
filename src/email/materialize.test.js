@@ -6,7 +6,7 @@ import os from 'node:os';
 import AdmZip from 'adm-zip';
 import sharp from 'sharp';
 
-import { isZipAttachment, extractZipEntries, materializeAttachments } from './email-service.js';
+import { isZipAttachment, extractZipEntries, materializeAttachments } from './materialize.js';
 
 async function tmpDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'ziptest-'));

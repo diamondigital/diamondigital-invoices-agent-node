@@ -2,7 +2,7 @@
 import { loadConfig } from './config.js';
 import { TriviAuth } from './trivi/auth.js';
 import { TriviService } from './trivi/upload.js';
-import { EmailService } from './email-service.js';
+import { EmailService } from './email/client.js';
 import { StorageService } from './aws/storage.js';
 import { NotificationService } from './aws/notifications.js';
 import { DocumentClassifier } from './classify/classifier.js';
