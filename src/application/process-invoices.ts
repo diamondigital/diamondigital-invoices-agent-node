@@ -1,17 +1,16 @@
 import fs from 'node:fs/promises';
-import { isInvoiceAttachment } from './attachment-filter.js';
+import { isInvoiceAttachment } from '../domain/attachment-filter.js';
+import type { Classification, ClassificationResult, EmailMessage, ProcessResult, UploadResult } from '../domain/types.js';
+import type { Services } from '../ports/services.js';
 import { sendSummary } from './summary.js';
 
-/**
- * @param {import('../types.js').EmailMessage} msg
- * @param {import('../types.js').Services} svc
- * @returns {Promise<import('../types.js').ProcessResult>}
- */
-export async function processEmail(msg, svc) {
+type ClassifyOutcome = Pick<Classification, 'isAccountingDocument' | 'confidence' | 'docType' | 'reason'> &
+  Partial<Pick<Classification, 'paymentMethod'>>;
+
+export async function processEmail(msg: EmailMessage, svc: Services): Promise<ProcessResult> {
   const { cfg, trivi, email, storage, classifier } = svc;
 
-  /** @type {import('../types.js').ProcessResult} */
-  const result = {
+  const result: ProcessResult = {
     emailId: msg.emailId,
     subject: msg.subject,
     success: false,
@@ -21,12 +20,12 @@ export async function processEmail(msg, svc) {
     console.log(`[processing] "${msg.subject}"`);
     const invoiceAttachments = msg.attachments.filter(isInvoiceAttachment);
 
-    const uploadResponses = [];
-    const uploadedNames = [];
-    const classifications = [];
+    const uploadResponses: UploadResult[] = [];
+    const uploadedNames: string[] = [];
+    const classifications: ClassificationResult[] = [];
 
     for (const attachment of invoiceAttachments) {
-      let cls = { isAccountingDocument: true, confidence: 1, docType: 'unknown', reason: 'classifier-disabled' };
+      let cls: ClassifyOutcome = { isAccountingDocument: true, confidence: 1, docType: 'unknown', reason: 'classifier-disabled' };
       if (classifier) {
         cls = await classifier.classifyAttachment(attachment, { subject: msg.subject, from: msg.from });
         console.log(`[classify] ${attachment.filename}: doc=${cls.isAccountingDocument} type=${cls.docType} conf=${cls.confidence} — ${cls.reason}`);
@@ -70,7 +69,8 @@ export async function processEmail(msg, svc) {
           }, null, 2)
         );
       } catch (error) {
-        console.warn(`[warn] S3 archive skipped after successful upload: ${error.message}`);
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[warn] S3 archive skipped after successful upload: ${message}`);
       }
     } else {
       result.skipped = true;
@@ -81,8 +81,9 @@ export async function processEmail(msg, svc) {
     }
 
   } catch (error) {
-    console.error(`[error] "${msg.subject}": ${error.message}`);
-    result.error = error.message;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[error] "${msg.subject}": ${message}`);
+    result.error = message;
   }
 
   try {
@@ -92,35 +93,33 @@ export async function processEmail(msg, svc) {
       await email.markAsSkipped(msg.emailId);
     }
   } catch (e) {
-    console.warn(`[warn] Failed to move email ${msg.emailId}: ${e.message}`);
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn(`[warn] Failed to move email ${msg.emailId}: ${message}`);
   }
 
   for (const att of msg.attachments) {
-    try { await fs.unlink(att.path); } catch {}
+    try { await fs.unlink(att.path); } catch { }
   }
 
   return result;
 }
 
-/**
- * @param {import('../types.js').Services} svc
- * @returns {Promise<import('../types.js').ProcessResult[]>}
- */
-export async function processInvoices(svc) {
+export async function processInvoices(svc: Services): Promise<ProcessResult[]> {
   const { cfg, email, notification } = svc;
   console.log('=== Starting uploaded documents processing ===');
-  const results = [];
+  const results: ProcessResult[] = [];
 
   try {
-    let emails;
+    let emails: EmailMessage[];
     try {
       await email.connect();
       emails = await email.fetchUnprocessedEmails();
     } catch (err) {
-      console.error(`[fatal] IMAP fetch failed: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[fatal] IMAP fetch failed: ${message}`);
       await notification.sendAlert(
         'IMAP connection failed',
-        `Could not connect to ${cfg.email.host}:${cfg.email.port}\nError: ${err.message}`
+        `Could not connect to ${cfg.email.host}:${cfg.email.port}\nError: ${message}`
       );
       throw err;
     }

@@ -4,9 +4,9 @@ import { buildSummaryLines } from './summary.js';
 
 test('buildSummaryLines tallies ok / skip / fail', () => {
   const lines = buildSummaryLines([
-    { success: true, uploadedCount: 1, subject: 'A', classifications: [{ uploaded: true, docType: 'invoice', confidence: 0.9 }] },
-    { success: false, skipped: true, subject: 'B', skipReason: 'no invoice-like attachment', classifications: [] },
-    { success: false, subject: 'C', error: 'boom' },
+    { emailId: '1', subject: 'A', success: true, uploadedCount: 1, classifications: [{ filename: 'a.pdf', isAccountingDocument: true, uploaded: true, docType: 'invoice', confidence: 0.9, reason: '' }] },
+    { emailId: '2', subject: 'B', success: false, skipped: true, skipReason: 'no invoice-like attachment', classifications: [] },
+    { emailId: '3', subject: 'C', success: false, error: 'boom' },
   ]).join('\n');
   assert.match(lines, /Celkem e-mailů: 3/);
   assert.match(lines, /Úspěšně nahráno: 1/);
