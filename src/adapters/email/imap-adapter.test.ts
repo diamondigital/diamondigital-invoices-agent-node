@@ -1,9 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EmailService } from './client.js';
+import { ImapEmailAdapter } from './imap-adapter.js';
+import type { ImapEmailAdapterConfig, ImapFlowFetchMessage, ImapFlowLike } from './imap-adapter.js';
 
-function makeFakeClient(existingFolders = []) {
-  const calls = {
+interface Calls {
+  connect: number;
+  logout: number;
+  list: number;
+  mailboxCreate: string[];
+  messageMove: Array<{ range: { uid: string }; dest: string }>;
+  locks: string[];
+}
+
+interface FakeClient extends ImapFlowLike {
+  calls: Calls;
+}
+
+function makeFakeClient(existingFolders: string[] = []): FakeClient {
+  const calls: Calls = {
     connect: 0,
     logout: 0,
     list: 0,
@@ -12,7 +26,7 @@ function makeFakeClient(existingFolders = []) {
     locks: [],
   };
   const folders = new Set(existingFolders);
-  const client = {
+  const client: FakeClient = {
     calls,
     mailbox: { exists: 0 },
     async connect() {
@@ -25,25 +39,24 @@ function makeFakeClient(existingFolders = []) {
       calls.list += 1;
       return [...folders].map((path) => ({ path }));
     },
-    async mailboxCreate(name) {
+    async mailboxCreate(name: string) {
       calls.mailboxCreate.push(name);
       folders.add(name);
     },
-    async getMailboxLock(mailbox) {
+    async getMailboxLock(mailbox: string) {
       calls.locks.push(mailbox);
       return { release() {} };
     },
-    async *fetch() {
-    },
-    async messageMove(range, dest) {
+    async *fetch(): AsyncGenerator<ImapFlowFetchMessage> {},
+    async messageMove(range: { uid: string }, dest: string) {
       calls.messageMove.push({ range, dest });
     },
   };
   return client;
 }
 
-function makeService(client, overrides = {}) {
-  return new EmailService({
+function makeService(client: ImapFlowLike, overrides: Partial<ImapEmailAdapterConfig> = {}): ImapEmailAdapter {
+  return new ImapEmailAdapter({
     host: 'imap.example.com',
     port: 993,
     secure: true,
@@ -163,7 +176,7 @@ test('fetchUnprocessedEmails() parses messages into the expected shape', async (
       '',
     ].join('\r\n')
   );
-  client.fetch = async function* () {
+  client.fetch = async function* (): AsyncGenerator<ImapFlowFetchMessage> {
     yield { uid: 99, source };
   };
   const svc = makeService(client);
@@ -173,6 +186,7 @@ test('fetchUnprocessedEmails() parses messages into the expected shape', async (
 
   assert.equal(emails.length, 1);
   const [msg] = emails;
+  assert.ok(msg);
   assert.equal(msg.emailId, '99');
   assert.equal(typeof msg.emailId, 'string');
   assert.equal(msg.subject, 'Faktura 2026');

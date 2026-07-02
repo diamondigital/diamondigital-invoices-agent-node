@@ -4,9 +4,46 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { materializeAttachments, DEFAULT_PROCESSED_LABEL } from './materialize.js';
+import type { EmailConfig, EmailMessage } from '../../domain/types.js';
+import type { EmailPort } from '../../ports/email-port.js';
 
-export class EmailService {
-  constructor(config) {
+export interface ImapFlowMailboxLock {
+  release(): void;
+}
+
+export interface ImapFlowListEntry {
+  path: string;
+}
+
+export interface ImapFlowFetchMessage {
+  uid: number | string;
+  source: Buffer;
+}
+
+export interface ImapFlowLike {
+  mailbox: { exists: number } | false;
+  connect(): Promise<void>;
+  logout(): Promise<void>;
+  list(): Promise<ImapFlowListEntry[]>;
+  mailboxCreate(path: string): Promise<unknown>;
+  getMailboxLock(path: string): Promise<ImapFlowMailboxLock>;
+  fetch(
+    range: { all: true },
+    query: { uid: true; envelope: true; source: true },
+  ): AsyncIterable<ImapFlowFetchMessage>;
+  messageMove(range: { uid: string }, destination: string): Promise<unknown>;
+}
+
+export type ImapEmailAdapterConfig = EmailConfig & { clientFactory?: () => ImapFlowLike };
+
+export class ImapEmailAdapter implements EmailPort {
+  config: ImapEmailAdapterConfig;
+  processedFolder: string;
+  skippedFolder: string;
+  clientFactory: () => ImapFlowLike;
+  client: ImapFlowLike | null;
+
+  constructor(config: ImapEmailAdapterConfig) {
     this.config = config;
     this.processedFolder = config.processedLabel || DEFAULT_PROCESSED_LABEL;
     this.skippedFolder = config.skippedFolder || 'Bez dokladu';
@@ -14,17 +51,17 @@ export class EmailService {
     this.client = null;
   }
 
-  #createClient() {
+  #createClient(): ImapFlowLike {
     return new ImapFlow({
       host: this.config.host,
       port: this.config.port,
       secure: this.config.secure,
       auth: { user: this.config.user, pass: this.config.password },
       logger: false,
-    });
+    }) as unknown as ImapFlowLike;
   }
 
-  async connect() {
+  async connect(): Promise<void> {
     if (this.client) return;
 
     const client = this.clientFactory();
@@ -35,40 +72,44 @@ export class EmailService {
     await this.#ensureFolders();
   }
 
-  async #ensureFolders() {
-    let existing = new Set();
+  async #ensureFolders(): Promise<void> {
+    const client = this.client!;
+    let existing = new Set<string>();
     try {
-      const boxes = await this.client.list();
+      const boxes = await client.list();
       existing = new Set(boxes.map((b) => b.path));
     } catch (err) {
-      console.warn(`[email] Could not list folders: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[email] Could not list folders: ${message}`);
     }
 
     for (const folder of [this.processedFolder, this.skippedFolder]) {
       if (existing.has(folder)) continue;
       try {
-        await this.client.mailboxCreate(folder);
+        await client.mailboxCreate(folder);
         console.log(`[email] Created folder "${folder}"`);
       } catch (err) {
-        console.warn(`[email] Could not create folder "${folder}": ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[email] Could not create folder "${folder}": ${message}`);
       }
     }
   }
 
-  async disconnect() {
+  async disconnect(): Promise<void> {
     if (!this.client) return;
     const client = this.client;
     this.client = null;
     try {
       await client.logout();
     } catch (err) {
-      console.warn(`[email] IMAP logout skipped: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[email] IMAP logout skipped: ${message}`);
     }
   }
 
-  async fetchUnprocessedEmails() {
-    const client = this.client;
-    const results = [];
+  async fetchUnprocessedEmails(): Promise<EmailMessage[]> {
+    const client = this.client!;
+    const results: EmailMessage[] = [];
 
     const lock = await client.getMailboxLock('INBOX');
     try {
@@ -78,7 +119,7 @@ export class EmailService {
       }
       for await (const msg of client.fetch(
         { all: true },
-        { uid: true, envelope: true, source: true }
+        { uid: true, envelope: true, source: true },
       )) {
         const parsed = await simpleParser(msg.source);
         const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'invoice-'));
@@ -103,16 +144,16 @@ export class EmailService {
     return results;
   }
 
-  async markAsProcessed(emailId) {
+  async markAsProcessed(emailId: string): Promise<void> {
     return this.#moveToFolder(emailId, this.processedFolder);
   }
 
-  async markAsSkipped(emailId) {
+  async markAsSkipped(emailId: string): Promise<void> {
     return this.#moveToFolder(emailId, this.skippedFolder);
   }
 
-  async #moveToFolder(emailId, folder) {
-    const client = this.client;
+  async #moveToFolder(emailId: string, folder: string): Promise<void> {
+    const client = this.client!;
     const lock = await client.getMailboxLock('INBOX');
     try {
       await client.messageMove({ uid: emailId }, folder);

@@ -8,13 +8,15 @@ import sharp from 'sharp';
 
 import { isZipAttachment, extractZipEntries, materializeAttachments } from './materialize.js';
 
-async function tmpDir() {
+async function tmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'ziptest-'));
 }
 
-function zipOf(entries) {
+function zipOf(entries: Array<[string, string | Buffer]>): Buffer {
   const zip = new AdmZip();
-  for (const [name, content] of entries) zip.addFile(name, Buffer.from(content));
+  for (const [name, content] of entries) {
+    zip.addFile(name, typeof content === 'string' ? Buffer.from(content) : Buffer.from(content));
+  }
   return zip.toBuffer();
 }
 
@@ -32,7 +34,7 @@ test('extractZipEntries writes each file and returns records', async () => {
   assert.equal(records.length, 2);
   const names = records.map((r) => r.filename).sort();
   assert.deepEqual(names, ['a.pdf', 'b.jpg']);
-  assert.equal(records[0].mimeType, 'application/pdf');
+  assert.equal(records[0]?.mimeType, 'application/pdf');
   for (const r of records) {
     assert.equal(path.dirname(r.path), dir);
     assert.equal((await fs.readFile(r.path)).length, r.sizeBytes);
@@ -44,8 +46,8 @@ test('extractZipEntries guards against zip-slip', async () => {
   const buf = zipOf([['../evil.pdf', 'X']]);
   const records = await extractZipEntries(buf, dir);
   assert.equal(records.length, 1);
-  assert.equal(records[0].filename, 'evil.pdf');
-  assert.equal(path.dirname(records[0].path), dir);
+  assert.equal(records[0]?.filename, 'evil.pdf');
+  assert.equal(path.dirname(records[0]?.path ?? ''), dir);
 });
 
 test('extractZipEntries returns [] for a corrupt buffer without throwing', async () => {
@@ -65,19 +67,17 @@ test('extractZipEntries disambiguates colliding basenames', async () => {
 
 test('extractZipEntries caps entry count at 50', async () => {
   const dir = await tmpDir();
-  const entries = [];
+  const entries: Array<[string, string]> = [];
   for (let i = 0; i < 60; i += 1) entries.push([`f${i}.pdf`, `n${i}`]);
   const records = await extractZipEntries(zipOf(entries), dir);
   assert.equal(records.length, 50);
 });
 
-// adm-zip's addFile() sanitizes ".." itself, so a hostile entry name must be
-// forced onto the entry object directly to reproduce what a crafted/hostile
-// zip byte stream can contain.
-function zipWithRawEntryName(rawName, content) {
+function zipWithRawEntryName(rawName: string, content: string): Buffer {
   const zip = new AdmZip();
   zip.addFile('placeholder', Buffer.from(content));
-  zip.getEntries()[0].entryName = rawName;
+  const entry = zip.getEntries()[0];
+  if (entry) entry.entryName = rawName;
   return zip.toBuffer();
 }
 
@@ -100,8 +100,6 @@ test('extractZipEntries rejects an entry named "foo/.." (zip-slip bypass)', asyn
 
 test('extractZipEntries skips an entry when writeFile fails, without throwing', async () => {
   const dir = await tmpDir();
-  // Make the destination path for "bad.pdf" a directory, so writeFile(filePath, data)
-  // fails with EISDIR instead of succeeding.
   await fs.mkdir(path.join(dir, 'bad.pdf'));
   const buf = zipOf([['bad.pdf', 'X'], ['good.pdf', 'Y']]);
   const records = await extractZipEntries(buf, dir);
@@ -114,11 +112,8 @@ test('extractZipEntries checks the byte cap before decompressing (uses header si
   zip.addFile('huge.pdf', Buffer.from('small-compressed-content'));
   const buf = zip.toBuffer();
   const rebuilt = new AdmZip(buf);
-  // Lie about the uncompressed size in the header to simulate a single entry
-  // that would blow the cap once decompressed — the guard must reject it
-  // using header.size before calling getData(), so getData() (which would
-  // detect the size lie via CRC/size mismatch) must never even run.
-  rebuilt.getEntries()[0].header.size = 200 * 1024 * 1024;
+  const entry = rebuilt.getEntries()[0];
+  if (entry) entry.header.size = 200 * 1024 * 1024;
   const records = await extractZipEntries(rebuilt.toBuffer(), dir);
   assert.deepEqual(records, []);
 });
@@ -144,7 +139,7 @@ test('materializeAttachments skips a corrupt zip but keeps other attachments', a
   ];
   const records = await materializeAttachments(parsed, dir);
   assert.equal(records.length, 1);
-  assert.equal(records[0].filename, 'good.pdf');
+  assert.equal(records[0]?.filename, 'good.pdf');
 });
 
 test('materializeAttachments skips attachments with no filename', async () => {
@@ -166,13 +161,11 @@ test('materializeAttachments de-collides a zip entry against a same-named direct
   const names = records.map((r) => r.filename);
   assert.equal(new Set(names).size, 2, 'filenames must be distinct');
   assert.ok(names.includes('dup.pdf'));
-  // Every record points at a real, distinct file on disk.
   const paths = new Set(records.map((r) => r.path));
   assert.equal(paths.size, 2);
   for (const r of records) await fs.access(r.path);
 });
 
-// A java.io byte[] serialization envelope, as the ČÚZK portal prepends to PDFs.
 const JAVA_ENVELOPE = Buffer.from([
   0xac, 0xed, 0x00, 0x05, 0x75, 0x72, 0x00, 0x02, 0x5b, 0x42,
 ]);
@@ -183,16 +176,16 @@ test('extractZipEntries strips a java-serialization envelope before %PDF', async
   const wrapped = Buffer.concat([JAVA_ENVELOPE, pdf]);
   const records = await extractZipEntries(zipOf([['doklad.pdf', wrapped]]), dir);
   assert.equal(records.length, 1);
-  const written = await fs.readFile(records[0].path);
+  const written = await fs.readFile(records[0]?.path ?? '');
   assert.ok(written.subarray(0, 4).equals(Buffer.from('%PDF')), 'written file starts with %PDF');
-  assert.equal(records[0].sizeBytes, pdf.length);
+  assert.equal(records[0]?.sizeBytes, pdf.length);
 });
 
 test('extractZipEntries leaves a clean %PDF file untouched', async () => {
   const dir = await tmpDir();
   const pdf = Buffer.from('%PDF-1.4\nclean\n%%EOF');
   const records = await extractZipEntries(zipOf([['clean.pdf', pdf]]), dir);
-  const written = await fs.readFile(records[0].path);
+  const written = await fs.readFile(records[0]?.path ?? '');
   assert.ok(written.equals(pdf));
 });
 
@@ -200,7 +193,7 @@ test('extractZipEntries does not strip non-document types even if they contain %
   const dir = await tmpDir();
   const png = Buffer.concat([Buffer.from([0xac, 0xed]), Buffer.from('junk %PDF junk')]);
   const records = await extractZipEntries(zipOf([['image.png', png]]), dir);
-  const written = await fs.readFile(records[0].path);
+  const written = await fs.readFile(records[0]?.path ?? '');
   assert.ok(written.equals(png), 'png left untouched');
 });
 
@@ -210,12 +203,12 @@ test('materializeAttachments strips a java envelope from a direct pdf attachment
   const wrapped = Buffer.concat([JAVA_ENVELOPE, pdf]);
   const parsed = [{ filename: 'doklad.pdf', content: wrapped, contentType: 'application/pdf', size: wrapped.length }];
   const records = await materializeAttachments(parsed, dir);
-  const written = await fs.readFile(records[0].path);
+  const written = await fs.readFile(records[0]?.path ?? '');
   assert.ok(written.subarray(0, 4).equals(Buffer.from('%PDF')));
-  assert.equal(records[0].sizeBytes, pdf.length);
+  assert.equal(records[0]?.sizeBytes, pdf.length);
 });
 
-async function webpBuffer() {
+async function webpBuffer(): Promise<Buffer> {
   return sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 1, g: 2, b: 3 } } })
     .webp().toBuffer();
 }
@@ -227,12 +220,12 @@ test('materializeAttachments converts a WebP attachment to PNG', async () => {
     dir,
   );
   assert.equal(records.length, 1);
-  assert.equal(records[0].filename, 'receipt.png');
-  assert.equal(records[0].mimeType, 'image/png');
-  const onDisk = await fs.readFile(records[0].path);
+  assert.equal(records[0]?.filename, 'receipt.png');
+  assert.equal(records[0]?.mimeType, 'image/png');
+  const onDisk = await fs.readFile(records[0]?.path ?? '');
   assert.equal(onDisk[0], 0x89);
   assert.equal(onDisk.subarray(1, 4).toString('latin1'), 'PNG');
-  assert.equal(onDisk.length, records[0].sizeBytes);
+  assert.equal(onDisk.length, records[0]?.sizeBytes);
 });
 
 test('materializeAttachments skips an unconvertible image but keeps others', async () => {
@@ -245,5 +238,5 @@ test('materializeAttachments skips an unconvertible image but keeps others', asy
     dir,
   );
   assert.equal(records.length, 1);
-  assert.equal(records[0].filename, 'good.pdf');
+  assert.equal(records[0]?.filename, 'good.pdf');
 });

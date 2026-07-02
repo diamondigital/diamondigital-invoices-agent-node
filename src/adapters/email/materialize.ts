@@ -1,14 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { needsPngConversion, toPng, toPngFilename } from '../lib/image.js';
+import { needsPngConversion, toPng, toPngFilename } from '../../shared/image.js';
+import type { Attachment } from '../../domain/types.js';
 
 export const DEFAULT_PROCESSED_LABEL = 'TRIVI';
 
 const MAX_ZIP_ENTRIES = 50;
 const MAX_ZIP_TOTAL_BYTES = 100 * 1024 * 1024;
 
-const EXT_MIME = {
+const EXT_MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -22,19 +23,19 @@ const EXT_MIME = {
   '.isdoc': 'application/xml',
 };
 
-function inferMime(filename) {
+function inferMime(filename: string): string {
   const dot = filename.lastIndexOf('.');
   const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
   return EXT_MIME[ext] || 'application/octet-stream';
 }
 
-const DOC_MAGIC = {
+const DOC_MAGIC: Record<string, Buffer> = {
   '.pdf': Buffer.from('%PDF'),
   '.xml': Buffer.from('<?xml'),
   '.isdoc': Buffer.from('<?xml'),
 };
 
-function normalizeDocumentContent(data, filename) {
+function normalizeDocumentContent(data: Buffer, filename: string): Buffer {
   const dot = filename.lastIndexOf('.');
   const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
   const magic = DOC_MAGIC[ext];
@@ -48,7 +49,7 @@ function normalizeDocumentContent(data, filename) {
   return data;
 }
 
-function uniqueName(name, usedNames) {
+function uniqueName(name: string, usedNames: Set<string>): string {
   let candidate = name;
   let i = 1;
   while (usedNames.has(candidate)) {
@@ -59,7 +60,13 @@ function uniqueName(name, usedNames) {
   return candidate;
 }
 
-async function writeAttachmentRecord(rawBuffer, rawName, mimeType, destDir, usedNames) {
+async function writeAttachmentRecord(
+  rawBuffer: Buffer,
+  rawName: string,
+  mimeType: string | undefined,
+  destDir: string,
+  usedNames: Set<string>,
+): Promise<Attachment | null> {
   let data = rawBuffer;
   let baseName = path.basename(rawName);
   let outMime = mimeType;
@@ -73,7 +80,8 @@ async function writeAttachmentRecord(rawBuffer, rawName, mimeType, destDir, used
       outMime = 'image/png';
       console.log(`[email] Converted "${rawName}" → "${baseName}" (TRIVI-safe PNG)`);
     } catch (err) {
-      console.warn(`[warn] Could not convert "${rawName}" to PNG — skipping: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[warn] Could not convert "${rawName}" to PNG — skipping: ${message}`);
       return null;
     }
   }
@@ -90,13 +98,20 @@ async function writeAttachmentRecord(rawBuffer, rawName, mimeType, destDir, used
   try {
     await fs.writeFile(filePath, content);
   } catch (err) {
-    console.warn(`[warn] Could not write attachment "${rawName}": ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[warn] Could not write attachment "${rawName}": ${message}`);
     return null;
   }
   return { filename, path: filePath, mimeType: outMime || inferMime(filename), sizeBytes: content.length };
 }
 
-export function isZipAttachment(att) {
+interface ZipAttachmentLike {
+  filename?: string;
+  contentType?: string;
+  mimeType?: string;
+}
+
+export function isZipAttachment(att: ZipAttachmentLike): boolean {
   const name = (att.filename || '').toLowerCase();
   const mime = (att.contentType || att.mimeType || '').toLowerCase();
   return (
@@ -106,13 +121,18 @@ export function isZipAttachment(att) {
   );
 }
 
-export async function extractZipEntries(buffer, destDir, usedNames = new Set()) {
-  const records = [];
+export async function extractZipEntries(
+  buffer: Buffer,
+  destDir: string,
+  usedNames: Set<string> = new Set(),
+): Promise<Attachment[]> {
+  const records: Attachment[] = [];
   let entries;
   try {
     entries = new AdmZip(buffer).getEntries();
   } catch (err) {
-    console.warn(`[warn] Could not open zip attachment: ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[warn] Could not open zip attachment: ${message}`);
     return records;
   }
 
@@ -140,7 +160,8 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
     try {
       data = entry.getData();
     } catch (err) {
-      console.warn(`[warn] Skipping unreadable zip entry "${entry.entryName}": ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[warn] Skipping unreadable zip entry "${entry.entryName}": ${message}`);
       continue;
     }
 
@@ -151,9 +172,18 @@ export async function extractZipEntries(buffer, destDir, usedNames = new Set()) 
   return records;
 }
 
-export async function materializeAttachments(parsedAttachments, destDir) {
-  const attachments = [];
-  const usedNames = new Set();
+export interface ParsedAttachment {
+  filename?: string;
+  content: Buffer;
+  contentType?: string;
+}
+
+export async function materializeAttachments(
+  parsedAttachments: ParsedAttachment[],
+  destDir: string,
+): Promise<Attachment[]> {
+  const attachments: Attachment[] = [];
+  const usedNames = new Set<string>();
   for (const att of parsedAttachments) {
     if (!att.filename) continue;
 
