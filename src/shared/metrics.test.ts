@@ -1,11 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emitMetrics } from './metrics.js';
+import { emitMetrics, type EmfPayload } from './metrics.js';
 
-function capture(fn) {
+function capture<T>(fn: () => T): T {
   const original = console.log;
-  const lines = [];
-  console.log = (line) => lines.push(line);
+  console.log = () => {};
   try {
     return fn();
   } finally {
@@ -14,17 +13,17 @@ function capture(fn) {
 }
 
 test('emitMetrics returns valid EMF object with fixed timestamp', () => {
-  let out;
+  let out: EmfPayload | undefined;
   capture(() => {
     out = emitMetrics({ processed: 3, successful: 2, skipped: 1, failed: 0 }, 1700000000000);
   });
 
-  assert.ok(out._aws);
-  assert.equal(out._aws.Timestamp, 1700000000000);
-  assert.ok(Array.isArray(out._aws.CloudWatchMetrics));
-  assert.equal(out._aws.CloudWatchMetrics.length, 1);
+  assert.ok(out!._aws);
+  assert.equal(out!._aws.Timestamp, 1700000000000);
+  assert.ok(Array.isArray(out!._aws.CloudWatchMetrics));
+  assert.equal(out!._aws.CloudWatchMetrics.length, 1);
 
-  const def = out._aws.CloudWatchMetrics[0];
+  const def = out!._aws.CloudWatchMetrics[0]!;
   assert.equal(def.Namespace, 'Diamondigital/InvoicesAgent');
   assert.ok(Array.isArray(def.Dimensions));
 
@@ -34,15 +33,14 @@ test('emitMetrics returns valid EMF object with fixed timestamp', () => {
     assert.equal(m.Unit, 'Count');
   }
 
-  assert.equal(out.EmailsProcessed, 3);
-  assert.equal(out.UploadsSuccessful, 2);
-  assert.equal(out.EmailsSkipped, 1);
-  assert.equal(out.UploadsFailed, 0);
+  assert.equal(out!.EmailsProcessed, 3);
+  assert.equal(out!.UploadsSuccessful, 2);
+  assert.equal(out!.EmailsSkipped, 1);
+  assert.equal(out!.UploadsFailed, 0);
 });
 
 test('emitMetrics writes exactly one console.log line of valid JSON', () => {
-  let lines;
-  lines = capture(() => {
+  capture(() => {
     emitMetrics({ processed: 5, successful: 4, skipped: 0, failed: 1 }, 1700000000001);
     return null;
   });
@@ -50,22 +48,22 @@ test('emitMetrics writes exactly one console.log line of valid JSON', () => {
 
 test('emitMetrics logs one parseable EMF line', () => {
   const original = console.log;
-  const lines = [];
-  console.log = (line) => lines.push(line);
+  const lines: string[] = [];
+  console.log = (line: string) => lines.push(line);
   try {
     emitMetrics({ processed: 5, successful: 4, skipped: 0, failed: 1 }, 42);
   } finally {
     console.log = original;
   }
   assert.equal(lines.length, 1);
-  const parsed = JSON.parse(lines[0]);
+  const parsed = JSON.parse(lines[0] as string);
   assert.equal(parsed._aws.Timestamp, 42);
   assert.equal(parsed.UploadsFailed, 1);
 });
 
 test('emitMetrics defaults timestamp to Date.now()', () => {
   const before = Date.now();
-  let out;
+  let out: EmfPayload | undefined;
   const original = console.log;
   console.log = () => {};
   try {
@@ -74,5 +72,5 @@ test('emitMetrics defaults timestamp to Date.now()', () => {
     console.log = original;
   }
   const after = Date.now();
-  assert.ok(out._aws.Timestamp >= before && out._aws.Timestamp <= after);
+  assert.ok(out!._aws.Timestamp >= before && out!._aws.Timestamp <= after);
 });

@@ -9,12 +9,12 @@ import { needsPngConversion, toPng, toPngFilename } from './image.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-function isPng(buf) {
+function isPng(buf: Buffer): boolean {
   return buf.length >= 4 && buf[0] === 0x89
     && buf.subarray(1, 4).toString('latin1') === 'PNG';
 }
 
-async function makeImage(format) {
+async function makeImage(format: 'webp' | 'tiff'): Promise<Buffer> {
   const img = sharp({
     create: { width: 8, height: 8, channels: 3, background: { r: 0, g: 128, b: 255 } },
   });
@@ -27,7 +27,7 @@ test('needsPngConversion: true for TRIVI-unsupported images', () => {
   assert.equal(needsPngConversion('scan.webp', ''), true);
   assert.equal(needsPngConversion('scan.tif', ''), true);
   assert.equal(needsPngConversion('scan.tiff', ''), true);
-  assert.equal(needsPngConversion('noext', 'image/webp'), true); // by MIME
+  assert.equal(needsPngConversion('noext', 'image/webp'), true);
 });
 
 test('needsPngConversion: false for formats TRIVI accepts', () => {

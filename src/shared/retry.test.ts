@@ -2,10 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withRetry, defaultShouldRetry } from './retry.js';
 
-function httpError(status) {
+function httpError(status: number): Error {
   const err = new Error(`HTTP ${status}`);
-  err.response = { status };
-  return err;
+  return Object.assign(err, { response: { status } });
 }
 
 test('withRetry returns the result on first success', async () => {
