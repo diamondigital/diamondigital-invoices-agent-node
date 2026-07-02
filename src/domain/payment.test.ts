@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PAYMENT_TYPE_CODES, paymentTypeFromMethod } from './mapping.js';
+import { PAYMENT_TYPE_CODES, paymentTypeFromMethod } from './payment.js';
 
 test('PAYMENT_TYPE_CODES maps known methods to TRIVI numeric enum', () => {
   assert.deepEqual(PAYMENT_TYPE_CODES, { bank_transfer: 1, cash: 2, cod: 3, card: 4 });
