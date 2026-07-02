@@ -1,9 +1,7 @@
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { loadFromSecretsManager } from './adapters/aws/secrets.js';
+import type { AppConfig } from './domain/types.js';
 
-/**
- * @returns {Promise<import('./types.js').AppConfig>}
- */
-export async function loadConfig() {
+export async function loadConfig(): Promise<AppConfig> {
   const secretName = process.env.SECRET_NAME;
   if (secretName) {
     return assertConfig(await loadFromSecretsManager(secretName));
@@ -11,20 +9,12 @@ export async function loadConfig() {
   return assertConfig(loadFromEnv());
 }
 
-/**
- * @param {unknown} v
- * @returns {boolean}
- */
-function isNonEmptyString(v) {
+export function isNonEmptyString(v: unknown): boolean {
   return typeof v === 'string' && v.length > 0;
 }
 
-/**
- * @param {import('./types.js').AppConfig} cfg
- * @returns {import('./types.js').AppConfig}
- */
-export function assertConfig(cfg) {
-  const problems = [];
+export function assertConfig(cfg: AppConfig): AppConfig {
+  const problems: string[] = [];
   const email = cfg?.email;
   const trivi = cfg?.trivi;
 
@@ -43,7 +33,7 @@ export function assertConfig(cfg) {
   return cfg;
 }
 
-function loadFromEnv() {
+export function loadFromEnv(): AppConfig {
   return {
     email: {
       host: requireEnv('EMAIL_HOST'),
@@ -77,23 +67,7 @@ function loadFromEnv() {
   };
 }
 
-/**
- * @param {string} secretName
- * @returns {Promise<import('./types.js').AppConfig>}
- */
-async function loadFromSecretsManager(secretName) {
-  const client = new SecretsManagerClient({});
-  const response = await client.send(
-    new GetSecretValueCommand({ SecretId: secretName })
-  );
-  return JSON.parse(response.SecretString);
-}
-
-/**
- * @param {string} name
- * @returns {string}
- */
-function requireEnv(name) {
+export function requireEnv(name: string): string {
   const val = process.env[name];
   if (!val) throw new Error(`Missing required env var: ${name}`);
   return val;

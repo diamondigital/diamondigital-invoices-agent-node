@@ -1,14 +1,15 @@
 import { loadConfig } from './config.js';
-import { TriviAuth } from './trivi/auth.js';
-import { TriviService } from './trivi/upload.js';
-import { EmailService } from './email/client.js';
-import { StorageService } from './aws/storage.js';
-import { NotificationService } from './aws/notifications.js';
-import { DocumentClassifier } from './classify/classifier.js';
-import { processInvoices } from './pipeline/run.js';
-import { log } from './lib/logger.js';
-import { emitMetrics } from './lib/metrics.js';
+import { TriviAuth } from './adapters/trivi/auth.js';
+import { TriviUploadAdapter } from './adapters/trivi/upload-adapter.js';
+import { ImapEmailAdapter } from './adapters/email/imap-adapter.js';
+import { S3StorageAdapter } from './adapters/aws/s3-storage.js';
+import { SnsNotificationAdapter } from './adapters/aws/sns-notification.js';
+import { MistralClassifierAdapter } from './adapters/mistral/classifier-adapter.js';
+import { processInvoices } from './application/process-invoices.js';
+import { log } from './shared/logger.js';
+import { emitMetrics } from './shared/metrics.js';
 import * as Sentry from '@sentry/aws-serverless';
+import type { Services } from './ports/services.js';
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({
@@ -18,18 +19,18 @@ if (process.env.SENTRY_DSN) {
   });
 }
 
-let services = null;
+let services: Services | null = null;
 
-async function setup() {
+async function setup(): Promise<Services> {
   const cfg = await loadConfig();
   const triviAuth = new TriviAuth(cfg.trivi);
-  const trivi = new TriviService(cfg.trivi, triviAuth);
-  const email = new EmailService(cfg.email);
-  const storage = new StorageService(cfg.s3);
-  const notification = new NotificationService(cfg.notification);
+  const trivi = new TriviUploadAdapter(cfg.trivi, triviAuth);
+  const email = new ImapEmailAdapter(cfg.email);
+  const storage = new S3StorageAdapter(cfg.s3);
+  const notification = new SnsNotificationAdapter(cfg.notification);
 
   const classifier = cfg.mistral.apiKey
-    ? new DocumentClassifier(cfg.mistral)
+    ? new MistralClassifierAdapter(cfg.mistral)
     : null;
   if (!classifier) {
     console.warn('[setup] MISTRAL_API_KEY missing — classification disabled, all invoice-like attachments will be uploaded');
@@ -39,7 +40,7 @@ async function setup() {
   return { cfg, trivi, email, storage, notification, classifier };
 }
 
-export const handler = Sentry.wrapHandler(async (event, context) => {
+export const handler = Sentry.wrapHandler(async (event: unknown, context: { awsRequestId: string }) => {
   log.info('lambda', 'Invocation', { requestId: context.awsRequestId });
 
   if (!services) {
@@ -50,7 +51,8 @@ export const handler = Sentry.wrapHandler(async (event, context) => {
   try {
     results = await processInvoices(services);
   } catch (error) {
-    log.error('lambda', 'Fatal error', { requestId: context.awsRequestId, error: error.message });
+    const message = error instanceof Error ? error.message : String(error);
+    log.error('lambda', 'Fatal error', { requestId: context.awsRequestId, error: message });
     throw error;
   }
 

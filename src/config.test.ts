@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig, assertConfig } from './config.js';
+import type { AppConfig } from './domain/types.js';
 
-function validConfig() {
+function validConfig(): AppConfig {
   return {
-    email: { host: 'h', port: 993, user: 'u', password: 'p' },
-    trivi: { appId: 'id', appSecret: 'sec' },
+    email: { host: 'h', port: 993, secure: false, user: 'u', password: 'p', processedLabel: 'TRIVI', skippedFolder: 'Bez dokladu' },
+    trivi: { appId: 'id', appSecret: 'sec', baseUrl: '', uploadsPath: '', scansPath: '', uploadFieldName: '' },
+    mistral: { apiKey: '', classifierModel: '', uploadThreshold: 0.85 },
+    notification: { snsTopicArn: '', adminEmail: '' },
+    s3: { bucketName: '' },
   };
 }
 
@@ -42,10 +46,10 @@ test('assertConfig throws listing all missing/invalid fields at once', () => {
   const cfg = {
     email: { host: '', port: 0, user: 'u', password: '' },
     trivi: { appId: 'id', appSecret: '' },
-  };
+  } as AppConfig;
   assert.throws(
     () => assertConfig(cfg),
-    (err) => {
+    (err: Error) => {
       assert.match(err.message, /^Invalid config: /);
       assert.match(err.message, /email\.host/);
       assert.match(err.message, /email\.port/);
@@ -69,8 +73,8 @@ test('assertConfig flags a non-finite / non-positive port', () => {
 
 test('assertConfig tolerates missing nested objects', () => {
   assert.throws(
-    () => assertConfig({}),
-    (err) => {
+    () => assertConfig({} as AppConfig),
+    (err: Error) => {
       assert.match(err.message, /email\.host/);
       assert.match(err.message, /trivi\.appId/);
       return true;
