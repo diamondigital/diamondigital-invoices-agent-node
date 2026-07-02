@@ -14,6 +14,10 @@ export const INVOICE_ATTACHMENT_MIME_TYPES = new Set([
 	'image/tiff',
 ]);
 
+/**
+ * @param {import('../types.js').Attachment} attachment
+ * @returns {boolean}
+ */
 export function isInvoiceAttachment(attachment) {
 	const name = (attachment.filename || '').toLowerCase();
 	const dotIndex = name.lastIndexOf('.');

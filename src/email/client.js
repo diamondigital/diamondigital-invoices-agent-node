@@ -10,6 +10,8 @@ export class EmailService {
     this.config = config;
     this.processedFolder = config.processedLabel || DEFAULT_PROCESSED_LABEL;
     this.skippedFolder = config.skippedFolder || 'Bez dokladu';
+    this.clientFactory = config.clientFactory || (() => this.#createClient());
+    this.client = null;
   }
 
   #createClient() {
@@ -22,52 +24,79 @@ export class EmailService {
     });
   }
 
-  async fetchUnprocessedEmails() {
-    const client = this.#createClient();
-    const results = [];
-    let connected = false;
+  async connect() {
+    if (this.client) return;
 
+    const client = this.clientFactory();
+    await client.connect();
+    this.client = client;
+    console.log('[email] Connected to IMAP server');
+
+    await this.#ensureFolders();
+  }
+
+  async #ensureFolders() {
+    let existing = new Set();
     try {
-      await client.connect();
-      connected = true;
-      console.log('[email] Connected to IMAP server');
+      const boxes = await this.client.list();
+      existing = new Set(boxes.map((b) => b.path));
+    } catch (err) {
+      console.warn(`[email] Could not list folders: ${err.message}`);
+    }
 
-      const lock = await client.getMailboxLock('INBOX');
+    for (const folder of [this.processedFolder, this.skippedFolder]) {
+      if (existing.has(folder)) continue;
       try {
-        if (!client.mailbox || client.mailbox.exists === 0) {
-          console.log('[email] INBOX is empty');
-          return results;
-        }
-        for await (const msg of client.fetch(
-          { all: true },
-          { uid: true, envelope: true, source: true }
-        )) {
-          const parsed = await simpleParser(msg.source);
-          const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'invoice-'));
+        await this.client.mailboxCreate(folder);
+        console.log(`[email] Created folder "${folder}"`);
+      } catch (err) {
+        console.warn(`[email] Could not create folder "${folder}": ${err.message}`);
+      }
+    }
+  }
 
-          const attachments = await materializeAttachments(parsed.attachments || [], tempDir);
+  async disconnect() {
+    if (!this.client) return;
+    const client = this.client;
+    this.client = null;
+    try {
+      await client.logout();
+    } catch (err) {
+      console.warn(`[email] IMAP logout skipped: ${err.message}`);
+    }
+  }
 
-          results.push({
-            emailId: String(msg.uid),
-            subject: parsed.subject || '(bez předmětu)',
-            from: parsed.from?.text || '',
-            receivedDate: parsed.date || new Date(),
-            bodyText: parsed.text || '',
-            bodyHtml: parsed.html || undefined,
-            attachments,
-          });
-        }
-      } finally {
-        lock.release();
+  async fetchUnprocessedEmails() {
+    const client = this.client;
+    const results = [];
+
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      if (!client.mailbox || client.mailbox.exists === 0) {
+        console.log('[email] INBOX is empty');
+        return results;
+      }
+      for await (const msg of client.fetch(
+        { all: true },
+        { uid: true, envelope: true, source: true }
+      )) {
+        const parsed = await simpleParser(msg.source);
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'invoice-'));
+
+        const attachments = await materializeAttachments(parsed.attachments || [], tempDir);
+
+        results.push({
+          emailId: String(msg.uid),
+          subject: parsed.subject || '(bez předmětu)',
+          from: parsed.from?.text || '',
+          receivedDate: parsed.date || new Date(),
+          bodyText: parsed.text || '',
+          bodyHtml: parsed.html || undefined,
+          attachments,
+        });
       }
     } finally {
-      if (connected) {
-        try {
-          await client.logout();
-        } catch (err) {
-          console.warn(`[email] IMAP logout skipped: ${err.message}`);
-        }
-      }
+      lock.release();
     }
 
     console.log(`[email] Fetched ${results.length} unprocessed email(s)`);
@@ -83,38 +112,13 @@ export class EmailService {
   }
 
   async #moveToFolder(emailId, folder) {
-    const client = this.#createClient();
-    let connected = false;
+    const client = this.client;
+    const lock = await client.getMailboxLock('INBOX');
     try {
-      await client.connect();
-      connected = true;
-      const exists = await client.list()
-        .then((boxes) => boxes.some((b) => b.path === folder))
-        .catch(() => false);
-      if (!exists) {
-        try {
-          await client.mailboxCreate(folder);
-          console.log(`[email] Created folder "${folder}"`);
-        } catch (err) {
-          console.warn(`[email] Could not create folder "${folder}": ${err.message}`);
-        }
-      }
-
-      const lock = await client.getMailboxLock('INBOX');
-      try {
-        await client.messageMove({ uid: emailId }, folder);
-        console.log(`[email] Moved ${emailId} to "${folder}"`);
-      } finally {
-        lock.release();
-      }
+      await client.messageMove({ uid: emailId }, folder);
+      console.log(`[email] Moved ${emailId} to "${folder}"`);
     } finally {
-      if (connected) {
-        try {
-          await client.logout();
-        } catch (err) {
-          console.warn(`[email] IMAP logout skipped: ${err.message}`);
-        }
-      }
+      lock.release();
     }
   }
 }

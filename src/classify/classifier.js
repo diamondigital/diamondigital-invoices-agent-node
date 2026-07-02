@@ -23,6 +23,10 @@ export function guessMimeType(filename, fallback) {
   }
 }
 
+/**
+ * @param {*} raw
+ * @returns {import('../types.js').Classification}
+ */
 export function parseClassification(raw) {
   if (typeof raw === 'string') {
     try {
@@ -64,6 +68,11 @@ export class DocumentClassifier {
     this.model = config.classifierModel || DEFAULT_CLASSIFIER_MODEL;
   }
 
+  /**
+   * @param {import('../types.js').Attachment} attachment
+   * @param {{ subject?: string, from?: string }} [context]
+   * @returns {Promise<import('../types.js').Classification>}
+   */
   async classifyAttachment(attachment, context = {}) {
     let buffer = await fs.readFile(attachment.path);
     let mimeType = guessMimeType(attachment.filename, attachment.mimeType);
@@ -95,6 +104,7 @@ export class DocumentClassifier {
 
   async #ocrToText(buffer, mimeType, filename) {
     const dataUri = `data:${mimeType};base64,${buffer.toString('base64')}`;
+    /** @type {import('@mistralai/mistralai/models/components/documenturlchunk.js').DocumentURLChunk | import('@mistralai/mistralai/models/components/imageurlchunk.js').ImageURLChunk} */
     const document = mimeType === 'application/pdf'
       ? { type: 'document_url', documentUrl: dataUri, documentName: filename }
       : { type: 'image_url', imageUrl: dataUri };

@@ -1,16 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { processInvoices } from './run.js';
+import { processInvoices, processEmail } from './run.js';
 
 function fakes(emails) {
   const moved = { processed: [], skipped: [] };
   const uploaded = [];
+  const lifecycle = { connected: 0, disconnected: 0 };
+  const order = [];
   return {
-    moved, uploaded,
+    moved, uploaded, lifecycle, order,
     svc: {
       cfg: { email: { host: 'h', port: 1 }, mistral: { uploadThreshold: 0.85 } },
       email: {
-        fetchUnprocessedEmails: async () => emails,
+        connect: async () => { lifecycle.connected++; order.push('connect'); },
+        disconnect: async () => { lifecycle.disconnected++; order.push('disconnect'); },
+        fetchUnprocessedEmails: async () => { order.push('fetch'); return emails; },
         markAsProcessed: async (id) => { moved.processed.push(id); },
         markAsSkipped: async (id) => { moved.skipped.push(id); },
       },
@@ -57,4 +61,80 @@ test('confidence below threshold is not uploaded', async () => {
   await processInvoices(svc);
   assert.deepEqual(uploaded, []);
   assert.deepEqual(moved.skipped, ['1']);
+});
+
+test('connect is called before fetch and disconnect runs in finally', async () => {
+  const { svc, lifecycle, order } = fakes([email('1', 'a.pdf')]);
+  await processInvoices(svc);
+  assert.equal(lifecycle.connected, 1);
+  assert.equal(lifecycle.disconnected, 1);
+  assert.equal(order.indexOf('connect') < order.indexOf('fetch'), true);
+  assert.equal(order[order.length - 1], 'disconnect');
+});
+
+test('empty INBOX still disconnects and does not send summary', async () => {
+  const { svc, lifecycle } = fakes([]);
+  let summaries = 0;
+  svc.notification.sendSummary = async () => { summaries++; };
+  const results = await processInvoices(svc);
+  assert.deepEqual(results, []);
+  assert.equal(lifecycle.connected, 1);
+  assert.equal(lifecycle.disconnected, 1);
+  assert.equal(summaries, 0);
+});
+
+test('fatal path: connect failure alerts, rethrows, and disconnects', async () => {
+  const { svc, lifecycle } = fakes([email('1', 'a.pdf')]);
+  const alerts = [];
+  svc.email.connect = async () => { lifecycle.connected++; throw new Error('boom'); };
+  svc.notification.sendAlert = async (subj) => { alerts.push(subj); };
+  await assert.rejects(() => processInvoices(svc), /boom/);
+  assert.deepEqual(alerts, ['IMAP connection failed']);
+  assert.equal(lifecycle.disconnected, 1);
+});
+
+test('fatal path: fetch failure alerts, rethrows, and disconnects', async () => {
+  const { svc, lifecycle } = fakes([email('1', 'a.pdf')]);
+  const alerts = [];
+  svc.email.fetchUnprocessedEmails = async () => { throw new Error('fetchfail'); };
+  svc.notification.sendAlert = async (subj) => { alerts.push(subj); };
+  await assert.rejects(() => processInvoices(svc), /fetchfail/);
+  assert.deepEqual(alerts, ['IMAP connection failed']);
+  assert.equal(lifecycle.connected, 1);
+  assert.equal(lifecycle.disconnected, 1);
+});
+
+test('processEmail success: uploaded, archived, and marked processed', async () => {
+  const { svc, moved, uploaded } = fakes([]);
+  const archived = [];
+  svc.storage.archiveEmail = async (id) => { archived.push(id); };
+  const result = await processEmail(email('1', 'a.pdf'), svc);
+  assert.equal(result.success, true);
+  assert.equal(result.uploadedCount, 1);
+  assert.deepEqual(result.uploadedNames, ['a.pdf']);
+  assert.deepEqual(uploaded, ['a.pdf']);
+  assert.deepEqual(archived, ['1']);
+  assert.deepEqual(moved.processed, ['1']);
+  assert.deepEqual(moved.skipped, []);
+});
+
+test('processEmail non-accounting-document: marked skipped, not processed', async () => {
+  const { svc, moved } = fakes([]);
+  svc.classifier.classifyAttachment = async () => ({ isAccountingDocument: false, confidence: 0.1, docType: 'other', paymentMethod: 'unknown', reason: '' });
+  const result = await processEmail(email('1', 'a.pdf'), svc);
+  assert.equal(result.success, false);
+  assert.equal(result.skipped, true);
+  assert.deepEqual(moved.skipped, ['1']);
+  assert.deepEqual(moved.processed, []);
+});
+
+test('processEmail upload throws: result.error set, email not moved', async () => {
+  const { svc, moved } = fakes([]);
+  svc.trivi.uploadDocumentAttachment = async () => { throw new Error('uploadfail'); };
+  const result = await processEmail(email('1', 'a.pdf'), svc);
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'uploadfail');
+  assert.equal(result.skipped, undefined);
+  assert.deepEqual(moved.processed, []);
+  assert.deepEqual(moved.skipped, []);
 });

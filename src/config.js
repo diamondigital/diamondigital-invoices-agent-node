@@ -1,11 +1,46 @@
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 
+/**
+ * @returns {Promise<import('./types.js').AppConfig>}
+ */
 export async function loadConfig() {
   const secretName = process.env.SECRET_NAME;
   if (secretName) {
-    return loadFromSecretsManager(secretName);
+    return assertConfig(await loadFromSecretsManager(secretName));
   }
-  return loadFromEnv();
+  return assertConfig(loadFromEnv());
+}
+
+/**
+ * @param {unknown} v
+ * @returns {boolean}
+ */
+function isNonEmptyString(v) {
+  return typeof v === 'string' && v.length > 0;
+}
+
+/**
+ * @param {import('./types.js').AppConfig} cfg
+ * @returns {import('./types.js').AppConfig}
+ */
+export function assertConfig(cfg) {
+  const problems = [];
+  const email = cfg?.email;
+  const trivi = cfg?.trivi;
+
+  if (!isNonEmptyString(email?.host)) problems.push('email.host');
+  if (!(typeof email?.port === 'number' && Number.isFinite(email.port) && email.port > 0)) {
+    problems.push('email.port');
+  }
+  if (!isNonEmptyString(email?.user)) problems.push('email.user');
+  if (!isNonEmptyString(email?.password)) problems.push('email.password');
+  if (!isNonEmptyString(trivi?.appId)) problems.push('trivi.appId');
+  if (!isNonEmptyString(trivi?.appSecret)) problems.push('trivi.appSecret');
+
+  if (problems.length > 0) {
+    throw new Error(`Invalid config: missing/invalid ${problems.join(', ')}`);
+  }
+  return cfg;
 }
 
 function loadFromEnv() {
@@ -42,6 +77,10 @@ function loadFromEnv() {
   };
 }
 
+/**
+ * @param {string} secretName
+ * @returns {Promise<import('./types.js').AppConfig>}
+ */
 async function loadFromSecretsManager(secretName) {
   const client = new SecretsManagerClient({});
   const response = await client.send(
@@ -50,6 +89,10 @@ async function loadFromSecretsManager(secretName) {
   return JSON.parse(response.SecretString);
 }
 
+/**
+ * @param {string} name
+ * @returns {string}
+ */
 function requireEnv(name) {
   const val = process.env[name];
   if (!val) throw new Error(`Missing required env var: ${name}`);

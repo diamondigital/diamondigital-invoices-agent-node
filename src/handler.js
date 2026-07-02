@@ -5,8 +5,18 @@ import { EmailService } from './email/client.js';
 import { StorageService } from './aws/storage.js';
 import { NotificationService } from './aws/notifications.js';
 import { DocumentClassifier } from './classify/classifier.js';
-import { withRetry } from './lib/retry.js';
 import { processInvoices } from './pipeline/run.js';
+import { log } from './lib/logger.js';
+import { emitMetrics } from './lib/metrics.js';
+import * as Sentry from '@sentry/aws-serverless';
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    tracesSampleRate: 0,
+    environment: process.env.SENTRY_ENVIRONMENT || 'production',
+  });
+}
 
 let services = null;
 
@@ -25,16 +35,12 @@ async function setup() {
     console.warn('[setup] MISTRAL_API_KEY missing — classification disabled, all invoice-like attachments will be uploaded');
   }
 
-  trivi.uploadDocumentAttachment = withRetry(trivi.uploadDocumentAttachment.bind(trivi), {
-    maxAttempts: 3, baseDelayMs: 1000,
-  });
-
   console.log('[setup] Services initialized');
   return { cfg, trivi, email, storage, notification, classifier };
 }
 
-export const handler = async (event, context) => {
-  console.log(`[lambda] Invocation: ${context.awsRequestId}`);
+export const handler = Sentry.wrapHandler(async (event, context) => {
+  log.info('lambda', 'Invocation', { requestId: context.awsRequestId });
 
   if (!services) {
     services = await setup();
@@ -44,7 +50,7 @@ export const handler = async (event, context) => {
   try {
     results = await processInvoices(services);
   } catch (error) {
-    console.error(`[lambda] Fatal error: ${error.message}`);
+    log.error('lambda', 'Fatal error', { requestId: context.awsRequestId, error: error.message });
     throw error;
   }
 
@@ -52,7 +58,15 @@ export const handler = async (event, context) => {
   const skipped = results.filter(r => !r.success && r.skipped).length;
   const fail = results.filter(r => !r.success && !r.skipped).length;
 
-  console.log(`[lambda] Done: ${results.length} processed, ${ok} ok, ${skipped} skipped, ${fail} failed`);
+  log.info('lambda', 'Done', {
+    requestId: context.awsRequestId,
+    processed: results.length,
+    ok,
+    skipped,
+    failed: fail,
+  });
+
+  emitMetrics({ processed: results.length, successful: ok, skipped, failed: fail });
 
   return {
     statusCode: fail > 0 ? 207 : 200,
@@ -63,4 +77,4 @@ export const handler = async (event, context) => {
       failed: fail,
     }),
   };
-};
+});

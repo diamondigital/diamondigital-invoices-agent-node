@@ -22,40 +22,47 @@ locally via `docker-compose` or `node --watch`.
 Entry point: `handler` in [src/handler.js](src/handler.js).
 
 ```
-handler (Lambda)
+handler (Lambda)                             # Sentry.wrapHandler (init only if SENTRY_DSN set)
   └─ setup()                                  # warm-start: services cached across invocations (module-level `services`)
-       loadConfig()                           # SECRET_NAME set → Secrets Manager; else .env
+       loadConfig()                           # SECRET_NAME set → Secrets Manager; else .env — assertConfig() on BOTH
   └─ processInvoices(svc)                     # src/pipeline/run.js
+       email.connect()                        # ONE persistent IMAP connection; ensures target folders once
        1. email.fetchUnprocessedEmails()      # everything in INBOX = unprocessed
-       2. for each email (isolated):
+       2. for each email → processEmail(msg, svc)  # per-email, never throws (isolation)
             filter isInvoiceAttachment()      # by extension OR MIME type
             for each qualifying attachment:
               classifier.classifyAttachment() # Mistral: is it an accounting doc? (skip if disabled)
-              trivi.uploadDocumentAttachment() # wrapped in withRetry(3×, exp backoff); two-step upload→scan
+              trivi.uploadDocumentAttachment() # two-step upload→scan; each step retried internally (idempotent)
             storage.archiveEmail()            # S3, best-effort (warn-only on failure)
             email.markAsProcessed/markAsSkipped() # move email out of INBOX → "TRIVI" or "Bez dokladu" folder
             cleanup temp attachments
        3. sendSummary()                       # SNS summary (Czech) + escalate failures to admin
+       email.disconnect()                     # in finally — always runs
+  emitMetrics()                               # CloudWatch EMF: processed/successful/skipped/failed
 ```
 
 Layers (one file = one responsibility):
 
 | File | Responsibility |
 |---|---|
-| [src/handler.js](src/handler.js) | Lambda entry: `setup()` (wires services, wraps upload in retry) + `handler` |
-| [src/config.js](src/config.js) | Config loading: Secrets Manager (prod) vs `.env` (local) |
-| [src/pipeline/run.js](src/pipeline/run.js) | `processInvoices(svc)` — the per-email orchestration loop |
+| [src/handler.js](src/handler.js) | Lambda entry: `setup()` (wires services) + `handler` (Sentry-wrapped, emits metrics) |
+| [src/config.js](src/config.js) | Config loading: Secrets Manager (prod) vs `.env` (local); `assertConfig` validates both |
+| [src/pipeline/run.js](src/pipeline/run.js) | `processInvoices(svc)` orchestration + `processEmail(msg, svc)` per-email unit |
 | [src/pipeline/attachment-filter.js](src/pipeline/attachment-filter.js) | `isInvoiceAttachment` — extension/MIME allowlist |
 | [src/pipeline/summary.js](src/pipeline/summary.js) | `buildSummaryLines` + `sendSummary` — the daily Czech report |
-| [src/email/client.js](src/email/client.js) | `EmailService` — IMAP: fetch INBOX, parse, move to folder |
+| [src/email/client.js](src/email/client.js) | `EmailService` — IMAP: `connect`/`disconnect` (one persistent conn), fetch INBOX, parse, move |
 | [src/email/materialize.js](src/email/materialize.js) | Zip expansion, PNG conversion, byte-envelope normalization, MIME inference |
 | [src/trivi/auth.js](src/trivi/auth.js) | `TriviAuth` — bearer token cache/refresh (5 min buffer) |
-| [src/trivi/upload.js](src/trivi/upload.js) | `TriviService.uploadDocumentAttachment` — the two-step TRIVI upload |
+| [src/trivi/upload.js](src/trivi/upload.js) | `TriviService.uploadDocumentAttachment` — two-step upload, each step retried internally |
+| [src/trivi/mapping.js](src/trivi/mapping.js) | `paymentTypeFromMethod` + `PAYMENT_TYPE_CODES` — classifier → TRIVI payment enum |
 | [src/classify/classifier.js](src/classify/classifier.js) | `DocumentClassifier` — Mistral accounting-document classification |
 | [src/aws/storage.js](src/aws/storage.js) | S3 audit archive (best-effort) |
 | [src/aws/notifications.js](src/aws/notifications.js) | SNS summaries + alerts |
 | [src/lib/image.js](src/lib/image.js) | `needsPngConversion`, `toPng`, `toPngFilename` |
-| [src/lib/retry.js](src/lib/retry.js) | `withRetry` — generic exponential-backoff wrapper |
+| [src/lib/retry.js](src/lib/retry.js) | `withRetry` + `defaultShouldRetry` — backoff wrapper that skips non-retryable 4xx |
+| [src/lib/logger.js](src/lib/logger.js) | `log.info/warn/error(area, message, fields)` — structured JSON logging |
+| [src/lib/metrics.js](src/lib/metrics.js) | `emitMetrics` — CloudWatch EMF metric line (no SDK call) |
+| [src/types.js](src/types.js) | JSDoc `@typedef`s for the domain model (Attachment, Classification, EmailMessage, ProcessResult, AppConfig, …) |
 
 Infra: [terraform/](terraform/) (ECR, EventBridge, IAM, Lambda, S3, Secrets, SNS),
 [Dockerfile](Dockerfile) (AWS Lambda nodejs:22 base), [docker-compose.yml](docker-compose.yml) (local run).
@@ -133,6 +140,32 @@ this section current — it's the only place they're written down.
    happens once, in `materializeAttachments`, before classification or upload —
    so both the classifier and TRIVI only ever see a TRIVI-safe PNG.
 
+8. **Retry granularity — the two-step upload is non-idempotent.** The TRIVI upload
+   is `POST /uploads` (uploads the file, returns `fileId`) → `POST
+   /accountingdocuments/scans` (creates the doc). Retrying the WHOLE operation
+   after step 1 succeeds would re-upload the file (orphan + duplicate). So retry
+   lives INSIDE [src/trivi/upload.js](src/trivi/upload.js): each step is wrapped in
+   its own `withRetry` and a step-2 failure retries only step 2, reusing the same
+   `fileId`. Do NOT re-add an outer `withRetry` around `uploadDocumentAttachment`.
+   The FormData/read stream is rebuilt inside each step-1 attempt (a consumed
+   stream can't be re-read).
+
+9. **Retry only opens for transient errors.** `defaultShouldRetry` in
+   [src/lib/retry.js](src/lib/retry.js) retries network errors (no `response`),
+   5xx, and 429; it does NOT retry other 4xx (400/401/403/…), which are permanent
+   and would only burn attempts + backoff.
+
+10. **Sentry is opt-in.** [src/handler.js](src/handler.js) calls `Sentry.init`
+    ONLY when `SENTRY_DSN` is set (else a full no-op) and wraps the handler with
+    `Sentry.wrapHandler` so rethrown fatal errors are captured before the Lambda
+    DLQ. Keep the guard — no DSN must mean no network calls (local/tests).
+
+11. **EMF metrics, not an SDK call.** [src/lib/metrics.js](src/lib/metrics.js)
+    writes one CloudWatch Embedded-Metric-Format JSON line to stdout;
+    CloudWatch auto-extracts `EmailsProcessed/UploadsSuccessful/EmailsSkipped/
+    UploadsFailed` from it. No PutMetricData permission needed. This is the only
+    thing you can build alarms on — keep it emitting on every invocation.
+
 ## Configuration
 
 - `SECRET_NAME` set → everything from AWS Secrets Manager (JSON with the same shape as
@@ -149,11 +182,15 @@ this section current — it's the only place they're written down.
 npm start          # node src/handler.js
 npm run dev        # node --watch src/handler.js --local
 npm test           # node --test (discovers **/*.test.js under src/)
+npm run typecheck  # tsc -p tsconfig.json (allowJs + checkJs, noEmit) — must be 0 errors
 docker compose up --build   # local run without AWS (see docker-compose.yml)
 ```
 
 ESM project (`"type": "module"`) — use `import`, not `require`.
 Node 22, built-in test runner only (`node:test`) — no Jest/Vitest.
+Type-checked via JSDoc + `checkJs` (no build step, still ships plain `.js`). Domain
+shapes live in [src/types.js](src/types.js); annotate public functions with JSDoc
+`@param`/`@returns` referencing those typedefs.
 
 ## Security — important
 
@@ -163,10 +200,14 @@ Node 22, built-in test runner only (`node:test`) — no Jest/Vitest.
 
 ## Conventions
 
-- The source is comment-free; logs are prefixed with `[area]` (`[trivi]`,
-  `[trivi-auth]`, `[email]`, `[retry]`, `[lambda]`, `[classify]`, `[storage]`,
-  `[notification]`, `[setup]`). Keep this style. Domain "why" belongs in this file,
-  not in code comments.
+- The source is comment-free — **no `//` or `/* */` comments anywhere**; the only
+  permitted `/** */` blocks are JSDoc type annotations. Domain "why" belongs in this
+  file, not in code comments.
+- Logs are prefixed with `[area]` (`[trivi]`, `[trivi-auth]`, `[email]`, `[retry]`,
+  `[classify]`, `[storage]`, `[notification]`, `[setup]`). The Lambda entry point
+  uses the structured JSON logger [src/lib/logger.js](src/lib/logger.js)
+  (`log.info('lambda', …)`); adopt it for new areas incrementally — CloudWatch
+  Logs Insights can then filter on fields instead of grepping strings.
 - User-facing text (daily summary, alerts) is **in Czech**; internal logs are in English.
 - One class/concern per file, grouped by domain folder (`email/`, `trivi/`,
   `classify/`, `aws/`, `pipeline/`, `lib/`). Add new integrations as their own file
