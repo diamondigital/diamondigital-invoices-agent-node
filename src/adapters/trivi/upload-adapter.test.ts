@@ -46,8 +46,8 @@ test('uploadDocumentAttachment runs the two-step upload→scan flow', async () =
   const res = await svc.uploadDocumentAttachment(tmpFile(), { subject: 'Faktura', classification: { paymentMethod: 'cash' } });
   assert.equal(res.fileId, 42);
   assert.equal(urls.length, 2);
-  assert.ok(urls[0].endsWith('/uploads'));
-  assert.ok(urls[1].endsWith('/accountingdocuments/scans'));
+  assert.ok(urls[0]?.endsWith('/uploads'));
+  assert.ok(urls[1]?.endsWith('/accountingdocuments/scans'));
   mock.reset();
 });
 
@@ -74,7 +74,7 @@ test('uploadDocumentAttachment sets paymentType from classification', async () =
   });
   const svc = new TriviUploadAdapter(cfg, auth);
   await svc.uploadDocumentAttachment(tmpFile(), { classification: { paymentMethod: 'card' } });
-  assert.equal(scanBody?.[0].paymentType, 4);
+  assert.equal(scanBody?.[0]?.paymentType, 4);
   mock.reset();
 });
 
@@ -87,7 +87,8 @@ test('uploadDocumentAttachment omits paymentType for unknown/missing method', as
   });
   const svc = new TriviUploadAdapter(cfg, auth);
   await svc.uploadDocumentAttachment(tmpFile(), { classification: { paymentMethod: 'unknown' } });
-  assert.ok(scanBody !== undefined && !('paymentType' in scanBody[0]));
+  const item = scanBody?.[0];
+  assert.ok(item !== undefined && !('paymentType' in item));
   mock.reset();
 });
 
