@@ -1,10 +1,6 @@
-// src/notification-service.js — SNS → SES email notifications
 import { SNSClient, PublishCommand } from '@aws-sdk/client-sns';
 
 export class NotificationService {
-  /**
-   * @param {{ snsTopicArn: string, adminEmail: string }} config
-   */
   constructor(config) {
     this.topicArn = config.snsTopicArn;
     this.sns = this.topicArn ? new SNSClient({}) : null;

@@ -1,10 +1,6 @@
-// src/storage-service.js — S3 audit trail archive
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 export class StorageService {
-  /**
-   * @param {{ bucketName: string }} config
-   */
   constructor(config) {
     this.bucket = config.bucketName;
     this.s3 = this.bucket ? new S3Client({}) : null;
