@@ -19,9 +19,9 @@ Date: 2026-07-02
 
 Replace the TRIVI credentials:
 
-- `TRIVI_APP_ID`: `***REDACTED-TRIVI-APP-ID***` → `***REDACTED-TRIVI-APP-ID***`
-- `TRIVI_APP_SECRET`: `***REDACTED-TRIVI-APP-SECRET***`
-  → `***REDACTED-TRIVI-APP-SECRET***`
+- `TRIVI_APP_ID`: `<OLD_TRIVI_APP_ID>` → `<NEW_TRIVI_APP_ID>`
+- `TRIVI_APP_SECRET`: `<OLD_TRIVI_APP_SECRET>`
+  → `<NEW_TRIVI_APP_SECRET>`
 
 Locations:
 
@@ -81,9 +81,9 @@ classifier, TRIVI upload, and S3 archive all see one canonical PNG.
 Old secrets present in history (each introduced in a single commit, in
 `.env.example` and `terraform/secrets.tf`):
 
-- TRIVI appId `***REDACTED-TRIVI-APP-ID***`
-- TRIVI appSecret `***REDACTED-TRIVI-APP-SECRET***`
-- Mistral apiKey `***REDACTED-MISTRAL-KEY***`
+- TRIVI appId `<OLD_TRIVI_APP_ID>`
+- TRIVI appSecret `<OLD_TRIVI_APP_SECRET>`
+- Mistral apiKey `<OLD_MISTRAL_KEY>`
 
 The email password was never committed (`.env` is gitignored) — confirmed via
 `git log -S`.

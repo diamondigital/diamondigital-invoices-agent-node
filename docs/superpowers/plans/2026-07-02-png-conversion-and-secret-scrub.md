@@ -15,8 +15,8 @@
 - Run all tests with `npm test` (`node --test src/**/*.test.js`); a single file with `node --test src/<file>.test.js`.
 - The NEW TRIVI keys go ONLY into the untracked `.env` (gitignored) and prod Secrets Manager — NEVER into any tracked file, so the history scrub cannot re-expose them.
 - New TRIVI credentials (verbatim):
-  - `TRIVI_APP_ID` = `***REDACTED-TRIVI-APP-ID***`
-  - `TRIVI_APP_SECRET` = `***REDACTED-TRIVI-APP-SECRET***`
+  - `TRIVI_APP_ID` = `<NEW_TRIVI_APP_ID>`
+  - `TRIVI_APP_SECRET` = `<NEW_TRIVI_APP_SECRET>`
 - Conversion failure for one attachment must SKIP that attachment (log a `[warn]`), never throw out of `materializeAttachments` — the email must not get stuck in INBOX.
 - Commit messages end with the repo's `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer.
 
@@ -404,8 +404,8 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 Edit `.env` lines 18–19 to:
 ```
-TRIVI_APP_ID=***REDACTED-TRIVI-APP-ID***
-TRIVI_APP_SECRET=***REDACTED-TRIVI-APP-SECRET***
+TRIVI_APP_ID=<NEW_TRIVI_APP_ID>
+TRIVI_APP_SECRET=<NEW_TRIVI_APP_SECRET>
 ```
 Leave the rest of `.env` (email password, Mistral key) unchanged.
 
@@ -444,11 +444,11 @@ Edit the `--secret-string` example JSON in the comment so it contains no real cr
 
 Run:
 ```bash
-grep -rn -e ***REDACTED-TRIVI-APP-ID*** \
-        -e ***REDACTED-TRIVI-APP-SECRET*** \
-        -e ***REDACTED-MISTRAL-KEY*** \
-        -e ***REDACTED-TRIVI-APP-ID*** \
-        -e ***REDACTED-TRIVI-APP-SECRET*** \
+grep -rn -e <OLD_TRIVI_APP_ID> \
+        -e <OLD_TRIVI_APP_SECRET> \
+        -e <OLD_MISTRAL_KEY> \
+        -e <NEW_TRIVI_APP_ID> \
+        -e <NEW_TRIVI_APP_SECRET> \
         .env.example terraform/secrets.tf
 ```
 Expected: no output (neither old nor new secrets appear in the tracked files).
@@ -493,9 +493,9 @@ Expected: a version string prints.
 
 Write this file to `/private/tmp/claude-501/-Users-jakubinger-Documents-development-diamondigital-diamondigital-invoices-agent-node/56b1ec3b-e0e4-46e5-b8da-7f4aa7ef8689/scratchpad/replacements.txt`:
 ```
-***REDACTED-TRIVI-APP-ID***==>***REDACTED-TRIVI-APP-ID***
-***REDACTED-TRIVI-APP-SECRET***==>***REDACTED-TRIVI-APP-SECRET***
-***REDACTED-MISTRAL-KEY***==>***REDACTED-MISTRAL-KEY***
+<OLD_TRIVI_APP_ID>==>***REDACTED-TRIVI-APP-ID***
+<OLD_TRIVI_APP_SECRET>==>***REDACTED-TRIVI-APP-SECRET***
+<OLD_MISTRAL_KEY>==>***REDACTED-MISTRAL-KEY***
 ```
 
 - [ ] **Step 4: Rewrite history**
@@ -510,9 +510,9 @@ Expected: filter-repo reports a completed rewrite of the commits. It removes the
 
 Run:
 ```bash
-git grep -n -e ***REDACTED-TRIVI-APP-ID*** \
-           -e ***REDACTED-TRIVI-APP-SECRET*** \
-           -e ***REDACTED-MISTRAL-KEY*** \
+git grep -n -e <OLD_TRIVI_APP_ID> \
+           -e <OLD_TRIVI_APP_SECRET> \
+           -e <OLD_MISTRAL_KEY> \
            $(git rev-list --all)
 ```
 Expected: no output (exit status 1). If any line prints, stop — the rewrite did not fully apply.
@@ -540,7 +540,7 @@ Do NOT run this — surface it to the user to run themselves (per repo memory, s
 ```bash
 aws secretsmanager put-secret-value \
   --secret-id diamondigital-invoices-agent-node \
-  --secret-string '{"email":{...},"trivi":{"appId":"***REDACTED-TRIVI-APP-ID***","appSecret":"***REDACTED-TRIVI-APP-SECRET***","baseUrl":"https://api.trivi.com/v2","bankAccountId":0},"mistral":{...},"notification":{...},"s3":{...}}'
+  --secret-string '{"email":{...},"trivi":{"appId":"<NEW_TRIVI_APP_ID>","appSecret":"<NEW_TRIVI_APP_SECRET>","baseUrl":"https://api.trivi.com/v2","bankAccountId":0},"mistral":{...},"notification":{...},"s3":{...}}'
 ```
 Tell the user to first fetch the current value (`aws secretsmanager get-secret-value --secret-id diamondigital-invoices-agent-node`) so the non-TRIVI fields are preserved, then swap only the two TRIVI fields.
 
