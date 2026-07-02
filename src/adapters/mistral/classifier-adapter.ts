@@ -1,48 +1,14 @@
 import { Mistral } from '@mistralai/mistralai';
 import convertHeic from 'heic-convert';
 import fs from 'node:fs/promises';
+import { guessMimeType, parseClassification } from '../../domain/classification.js';
+import type { Attachment, Classification, MistralConfig } from '../../domain/types.js';
+import type { ClassifierPort, ClassifyContext } from '../../ports/classifier-port.js';
 
 export const DEFAULT_CLASSIFIER_MODEL = 'ministral-8b-latest';
 export const OCR_MODEL = 'mistral-ocr-latest';
 
 const VISION_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-
-export function guessMimeType(filename, fallback) {
-  const ext = filename.toLowerCase().slice(filename.lastIndexOf('.'));
-  switch (ext) {
-    case '.pdf': return 'application/pdf';
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.webp': return 'image/webp';
-    case '.heic': return 'image/heic';
-    case '.heif': return 'image/heif';
-    case '.tif':
-    case '.tiff': return 'image/tiff';
-    default: return fallback || 'application/octet-stream';
-  }
-}
-
-/**
- * @param {*} raw
- * @returns {import('../types.js').Classification}
- */
-export function parseClassification(raw) {
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      return {
-        isAccountingDocument: Boolean(parsed.isAccountingDocument),
-        confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0)),
-        docType: parsed.docType || 'other',
-        paymentMethod: parsed.paymentMethod || 'unknown',
-        reason: parsed.reason || '',
-      };
-    } catch {
-    }
-  }
-  return { isAccountingDocument: false, confidence: 0, docType: 'other', paymentMethod: 'unknown', reason: 'classification_unavailable' };
-}
 
 const INSTRUCTIONS =
   `Rozhodni, zda jde o ÚČETNÍ DOKLAD (faktura, daňový doklad, účtenka, dobropis, ` +
@@ -62,18 +28,18 @@ const JSON_SPEC =
   `"paymentMethod": "cash|card|bank_transfer|cod|unknown (dle pravidla výše; materiál/zboží = cash, není-li výslovně jinak)", ` +
   `"reason": "krátké zdůvodnění"}`;
 
-export class DocumentClassifier {
-  constructor(config) {
+type ChatContent = string | Array<{ type: 'text'; text: string } | { type: 'image_url'; imageUrl: string }>;
+
+export class MistralClassifierAdapter implements ClassifierPort {
+  private readonly mistral: Mistral;
+  private readonly model: string;
+
+  constructor(config: Pick<MistralConfig, 'apiKey' | 'classifierModel'>) {
     this.mistral = new Mistral({ apiKey: config.apiKey });
     this.model = config.classifierModel || DEFAULT_CLASSIFIER_MODEL;
   }
 
-  /**
-   * @param {import('../types.js').Attachment} attachment
-   * @param {{ subject?: string, from?: string }} [context]
-   * @returns {Promise<import('../types.js').Classification>}
-   */
-  async classifyAttachment(attachment, context = {}) {
+  async classifyAttachment(attachment: Attachment, context: ClassifyContext = {}): Promise<Classification> {
     let buffer = await fs.readFile(attachment.path);
     let mimeType = guessMimeType(attachment.filename, attachment.mimeType);
 
@@ -90,36 +56,35 @@ export class DocumentClassifier {
 
     if (VISION_MIME_TYPES.has(mimeType)) {
       const dataUri = `data:${mimeType};base64,${buffer.toString('base64')}`;
-      return this.#chatClassify([
+      return this.chatClassify([
         { type: 'text', text: `${INSTRUCTIONS}\n${ctx}\n${JSON_SPEC}` },
         { type: 'image_url', imageUrl: dataUri },
       ]);
     }
 
-    const text = await this.#ocrToText(buffer, mimeType, attachment.filename);
-    return this.#chatClassify(
+    const text = await this.ocrToText(buffer, mimeType, attachment.filename);
+    return this.chatClassify(
       `${INSTRUCTIONS}\n${ctx}\n--- OBSAH (z OCR) ---\n${text.slice(0, 6000)}\n--- KONEC ---\n${JSON_SPEC}`
     );
   }
 
-  async #ocrToText(buffer, mimeType, filename) {
+  private async ocrToText(buffer: Buffer, mimeType: string, filename: string): Promise<string> {
     const dataUri = `data:${mimeType};base64,${buffer.toString('base64')}`;
-    /** @type {import('@mistralai/mistralai/models/components/documenturlchunk.js').DocumentURLChunk | import('@mistralai/mistralai/models/components/imageurlchunk.js').ImageURLChunk} */
     const document = mimeType === 'application/pdf'
-      ? { type: 'document_url', documentUrl: dataUri, documentName: filename }
-      : { type: 'image_url', imageUrl: dataUri };
+      ? { type: 'document_url' as const, documentUrl: dataUri, documentName: filename }
+      : { type: 'image_url' as const, imageUrl: dataUri };
     const res = await this.mistral.ocr.process({ model: OCR_MODEL, document });
     return (res.pages || []).map((p) => p.markdown || '').join('\n');
   }
 
-  async #chatClassify(content) {
+  private async chatClassify(content: ChatContent): Promise<Classification> {
     const res = await this.mistral.chat.complete({
       model: this.model,
       messages: [{ role: 'user', content }],
       responseFormat: { type: 'json_object' },
       temperature: 0,
     });
-    const raw = res.choices?.[0]?.message?.content;
+    const raw = res.choices?.[0]?.message?.content as string | undefined;
     return parseClassification(raw);
   }
 }
