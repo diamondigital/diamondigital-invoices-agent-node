@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
+import { simpleParser } from 'mailparser';
 import { needsPngConversion, toPng, toPngFilename } from '../../shared/image.js';
 import type { Attachment } from '../../domain/types.js';
 
@@ -8,6 +9,7 @@ export const DEFAULT_PROCESSED_LABEL = 'TRIVI';
 
 const MAX_ZIP_ENTRIES = 50;
 const MAX_ZIP_TOTAL_BYTES = 100 * 1024 * 1024;
+const MAX_RFC822_DEPTH = 5;
 
 const EXT_MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -121,6 +123,12 @@ export function isZipAttachment(att: ZipAttachmentLike): boolean {
   );
 }
 
+export function isForwardedMessage(att: ZipAttachmentLike): boolean {
+  const name = (att.filename || '').toLowerCase();
+  const mime = (att.contentType || att.mimeType || '').toLowerCase();
+  return mime === 'message/rfc822' || name.endsWith('.eml');
+}
+
 export async function extractZipEntries(
   buffer: Buffer,
   destDir: string,
@@ -178,13 +186,43 @@ export interface ParsedAttachment {
   contentType?: string;
 }
 
+async function extractForwardedAttachments(
+  source: Buffer,
+  destDir: string,
+  usedNames: Set<string>,
+  depth: number,
+): Promise<Attachment[]> {
+  let parsed;
+  try {
+    parsed = await simpleParser(source);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[warn] Could not parse forwarded message: ${message}`);
+    return [];
+  }
+  return materializeAttachments(parsed.attachments || [], destDir, usedNames, depth + 1);
+}
+
 export async function materializeAttachments(
   parsedAttachments: ParsedAttachment[],
   destDir: string,
+  usedNames: Set<string> = new Set(),
+  depth = 0,
 ): Promise<Attachment[]> {
   const attachments: Attachment[] = [];
-  const usedNames = new Set<string>();
   for (const att of parsedAttachments) {
+    if (isForwardedMessage(att)) {
+      if (depth >= MAX_RFC822_DEPTH) {
+        console.warn(`[warn] Forwarded-message nesting limit (${MAX_RFC822_DEPTH}) reached — skipping "${att.filename || '(no name)'}"`);
+        continue;
+      }
+      console.log(`[email] Reading nested forwarded message: ${att.filename || '(no name)'}`);
+      const extracted = await extractForwardedAttachments(att.content, destDir, usedNames, depth);
+      console.log(`[email] Extracted ${extracted.length} file(s) from forwarded message`);
+      attachments.push(...extracted);
+      continue;
+    }
+
     if (!att.filename) continue;
 
     if (isZipAttachment(att)) {

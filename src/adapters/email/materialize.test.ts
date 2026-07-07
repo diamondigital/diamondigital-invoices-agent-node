@@ -208,6 +208,85 @@ test('materializeAttachments strips a java envelope from a direct pdf attachment
   assert.equal(records[0]?.sizeBytes, pdf.length);
 });
 
+function rawMessage(parts: Array<{ headers: string[]; body: string }>, boundary = 'B'): Buffer {
+  const lines = [
+    'From: someone@example.com',
+    'Subject: Msg',
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+  ];
+  for (const p of parts) {
+    lines.push(`--${boundary}`, ...p.headers, '', p.body);
+  }
+  lines.push(`--${boundary}--`, '');
+  return Buffer.from(lines.join('\r\n'));
+}
+
+function pdfPart(filename: string, body: string) {
+  return {
+    headers: [
+      `Content-Type: application/pdf; name="${filename}"`,
+      `Content-Disposition: attachment; filename="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+    ],
+    body: Buffer.from(body).toString('base64'),
+  };
+}
+
+test('materializeAttachments extracts a PDF from a forwarded message/rfc822 attachment', async () => {
+  const dir = await tmpDir();
+  const inner = rawMessage([
+    { headers: ['Content-Type: text/plain'], body: 'Here is your invoice' },
+    pdfPart('invoice.pdf', '%PDF-1.4 real invoice'),
+  ]);
+  const records = await materializeAttachments(
+    [{ filename: 'forwarded.eml', content: inner, contentType: 'message/rfc822' }],
+    dir,
+  );
+  assert.deepEqual(records.map((r) => r.filename), ['invoice.pdf']);
+  assert.equal(records[0]?.mimeType, 'application/pdf');
+  assert.ok((await fs.readFile(records[0]?.path ?? '')).subarray(0, 4).equals(Buffer.from('%PDF')));
+});
+
+test('materializeAttachments reads a forwarded message even when it has no filename', async () => {
+  const dir = await tmpDir();
+  const inner = rawMessage([pdfPart('invoice.pdf', '%PDF-1.4 body')]);
+  const records = await materializeAttachments(
+    [{ content: inner, contentType: 'message/rfc822' }],
+    dir,
+  );
+  assert.deepEqual(records.map((r) => r.filename), ['invoice.pdf']);
+});
+
+test('materializeAttachments recurses through a doubly-forwarded message', async () => {
+  const dir = await tmpDir();
+  const innermost = rawMessage([pdfPart('invoice.pdf', '%PDF-1.4 body')]);
+  const middle = rawMessage([
+    {
+      headers: ['Content-Type: message/rfc822', 'Content-Disposition: attachment; filename="orig.eml"'],
+      body: innermost.toString('utf8'),
+    },
+  ]);
+  const records = await materializeAttachments(
+    [{ filename: 'fwd.eml', content: middle, contentType: 'message/rfc822' }],
+    dir,
+  );
+  assert.deepEqual(records.map((r) => r.filename), ['invoice.pdf']);
+});
+
+test('materializeAttachments skips an unparseable forwarded message but keeps others', async () => {
+  const dir = await tmpDir();
+  const records = await materializeAttachments(
+    [
+      { filename: 'junk.eml', content: Buffer.from('not a real email'), contentType: 'message/rfc822' },
+      { filename: 'good.pdf', content: Buffer.from('%PDF-1.4 body'), contentType: 'application/pdf' },
+    ],
+    dir,
+  );
+  assert.deepEqual(records.map((r) => r.filename), ['good.pdf']);
+});
+
 async function webpBuffer(): Promise<Buffer> {
   return sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 1, g: 2, b: 3 } } })
     .webp().toBuffer();
